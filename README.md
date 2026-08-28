@@ -149,6 +149,8 @@ Instead, each incoming frame writes its colour into a per-light slot (newest win
 
 With 4 lights on a typical Zigbee coordinator, expect ~5–6 commands/second (~1.5 updates/light/second) with continuous smooth fading.
 
+This pacing only covers the bridge's own traffic — it has no visibility into commands your other automations send to the same lights or the same Zigbee mesh at the same time, and a scene, a sweep or an OTA update competing for that airtime can cause the same kind of lag or a missed command on either side. `pause` and `release` (see [Pause, resume, release](#pause-resume-release) above) exist for exactly this: calling one before your own automation touches these lights is how it steps out of the way instead of contending for the radio. Full contract and edge cases: [docs/pause-release.md](docs/pause-release.md).
+
 ## Tested with
 
 - Philips 55OLED806/12 (Ambilight, v1 XY frames at 25 fps)
