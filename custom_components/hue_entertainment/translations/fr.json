@@ -10,7 +10,7 @@
         "name": "État",
         "state": {
           "idle": "Inactif",
-          "streaming": "Diffusion",
+          "streaming": "Synchronisation",
           "classic": "Mode classique",
           "paused": "En pause",
           "releasing": "Libération"
@@ -21,7 +21,7 @@
   "services": {
     "pause": {
       "name": "Pause",
-      "description": "Suspend brièvement l'effet du pont sur ses lumières, puis reprend automatiquement. Pour un conflit d'accès radio : rien n'a changé quant à l'état attendu des lumières, la session (s'il y en a une) est laissée telle quelle et reprend à la fin de la pause.",
+      "description": "Suspend brièvement l'action du pont sur les lumières, puis reprend automatiquement. En cas de conflit d'accès radio : l'état attendu des lumières ne change pas, la session (s'il y en a une) est laissée telle quelle et reprend à la fin de la pause.",
       "fields": {
         "seconds": {
           "name": "Secondes",
@@ -35,11 +35,11 @@
     },
     "release": {
       "name": "Libérer",
-      "description": "Cesse de piloter les lumières jusqu'au début d'une nouvelle session. Pour un changement d'intention, par exemple une extinction générale : abandonne l'état à restaurer pour que les lumières restent telles que l'appelant les a réglées, demande au téléviseur de s'arrêter via l'indicateur de flux actif, et force la même coupure propre s'il n'obtempère pas dans le délai de grâce.",
+      "description": "Cesse de piloter les lumières jusqu'au début d'une nouvelle session. Utile lors d'un changement d'usage des lumières, par exemple une extinction générale : elles restent telles que vous les avez réglées, sans restauration à leur état d'origine. Le pont demande au téléviseur de s'arrêter, et force lui-même la coupure s'il ne répond pas dans le délai de grâce.",
       "fields": {
         "seconds": {
           "name": "Secondes",
-          "description": "Délai de grâce laissé au téléviseur pour obtempérer avant de forcer l'arrêt. 0 utilise une valeur par défaut raisonnable (quelques secondes)."
+          "description": "Délai de grâce laissé au téléviseur pour répondre avant de forcer l'arrêt. 0 utilise une valeur par défaut raisonnable (quelques secondes)."
         },
         "settle_seconds": {
           "name": "Secondes de stabilisation",
@@ -52,26 +52,26 @@
     "step": {
       "user": {
         "title": "Sélectionner les lumières",
-        "description": "Choisissez les lumières à inclure dans l'espace de divertissement.",
+        "description": "Choisissez les lumières à inclure dans la zone de divertissement.",
         "data": {
           "lights": "Lumières"
         }
       },
       "pre_pairing": {
-        "title": "Prêt pour l'association",
-        "description": "L'étape suivante lancera un compte à rebours d'association de 60 secondes.\n\nAvant d'appuyer sur **Suivant**, ouvrez les paramètres de votre téléviseur et accédez à **Ambilight > Ambilight+hue** afin qu'il soit prêt à rechercher le pont."
+        "title": "Prêt pour la connexion",
+        "description": "L'étape suivante lancera un compte à rebours de connexion de 60 secondes.\n\nAvant d'appuyer sur **Suivant**, ouvrez les paramètres de votre téléviseur et accédez à **Ambilight > Ambilight+hue** afin qu'il soit prêt à rechercher le pont."
       },
       "pairing": {
-        "title": "Association en cours",
-        "description": "Recherche de votre téléviseur. La fenêtre d'association reste ouverte pendant 60 secondes."
+        "title": "Connexion en cours",
+        "description": "Recherche de votre téléviseur. La fenêtre de connexion reste ouverte pendant 60 secondes."
       },
       "not_paired": {
-        "title": "Délai d'association dépassé",
-        "description": "Votre téléviseur ne s'est pas associé dans le temps imparti. Le pont va démarrer sans téléviseur associé — vous pourrez relancer l'association plus tard depuis le menu de configuration de l'intégration."
+        "title": "Délai de connexion dépassé",
+        "description": "Votre téléviseur ne s'est pas connecté dans le temps imparti. Le pont va démarrer sans téléviseur connecté — vous pourrez relancer la connexion plus tard depuis le menu de configuration de l'intégration."
       }
     },
     "progress": {
-      "waiting_for_tv": "En attente de l'association de votre téléviseur…"
+      "waiting_for_tv": "En attente de la connexion de votre téléviseur…"
     },
     "abort": {
       "already_configured": "Le pont de divertissement Hue (Hue Entertainment Bridge) est déjà configuré.",
@@ -82,30 +82,30 @@
     "step": {
       "init": {
         "title": "Pont de divertissement Hue",
-        "description": "Modifiez les lumières de l'espace de divertissement ou associez votre téléviseur.",
+        "description": "Modifiez les lumières de la zone de divertissement ou connectez votre téléviseur.",
         "data": {
           "lights": "Lumières",
-          "pair_now": "Associer le téléviseur maintenant",
+          "pair_now": "Connecter le téléviseur maintenant",
           "bind_ip": "Lier à l'adresse IP",
           "http_mode": "Serveur API Hue"
         },
         "data_description": {
-          "pair_now": "Ouvre une fenêtre d'association de 60 secondes après l'enregistrement.",
+          "pair_now": "Ouvre une fenêtre de connexion de 60 secondes après l'enregistrement.",
           "bind_ip": "Laissez vide pour utiliser l'adresse IP de l'hôte HA détectée automatiquement. Renseignez une adresse IP secondaire (ex. une interface macvlan) pour que les serveurs HTTP et DTLS du pont écoutent uniquement sur cette adresse, libérant ainsi le port 80 sur l'IP principale pour Traefik ou Nginx.",
-          "http_mode": "Où l'API REST Hue est servie. Automatique : utilise le serveur web de Home Assistant lorsqu'il écoute sur le port 80 sans HTTPS (Paramètres → Système → Réseau, HA 2026.8+), sinon un serveur autonome sur le port 80. Ne changer que si le choix automatique est incorrect."
+          "http_mode": "Où l'API REST Hue est servie. Automatique : utilise le serveur web de Home Assistant lorsqu'il écoute sur le port 80 sans HTTPS (Paramètres → Système → Réseau, HA 2026.8+), sinon un serveur autonome sur le port 80. Ne changez que si le choix automatique est incorrect."
         }
       },
       "pairing": {
-        "title": "Associer votre téléviseur",
-        "description": "Ouvrez les paramètres Ambilight Sync de votre téléviseur maintenant. La fenêtre d'association reste ouverte pendant 60 secondes."
+        "title": "Connecter votre téléviseur",
+        "description": "Ouvrez les paramètres Ambilight Sync de votre téléviseur maintenant. La fenêtre de connexion reste ouverte pendant 60 secondes."
       },
       "not_paired": {
-        "title": "Délai d'association dépassé",
-        "description": "Votre téléviseur ne s'est pas associé dans le temps imparti. Vous pouvez réessayer depuis le menu de configuration."
+        "title": "Délai de connexion dépassé",
+        "description": "Votre téléviseur ne s'est pas connecté dans le temps imparti. Vous pouvez réessayer depuis le menu de configuration."
       }
     },
     "progress": {
-      "waiting_for_tv": "En attente de l'association de votre téléviseur…"
+      "waiting_for_tv": "En attente de la connexion de votre téléviseur…"
     },
     "error": {
       "invalid_ip": "Adresse IPv4 invalide"
