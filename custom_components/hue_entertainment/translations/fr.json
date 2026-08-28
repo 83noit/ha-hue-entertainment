@@ -40,6 +40,10 @@
         "seconds": {
           "name": "Secondes",
           "description": "Délai de grâce laissé au téléviseur pour obtempérer avant de forcer l'arrêt. 0 utilise une valeur par défaut raisonnable (quelques secondes)."
+        },
+        "settle_seconds": {
+          "name": "Secondes de stabilisation",
+          "description": "Optionnel : bloque cet appel pendant cette durée avant de rendre la main, une fois la libération déjà effective. Laisse le temps à une commande déjà en cours d'envoi au moment de l'appel d'atteindre la lumière avant que votre propre extinction (par ex. light.turn_off) ne vienne concurrencer la même radio. 0 (par défaut) désactive complètement cette attente."
         }
       }
     }

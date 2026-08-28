@@ -25,6 +25,7 @@ from .const import (
     CIE_TOLERANCE,
     CLASSIC_DRAIN_IDLE,
     COLOR_SPACE_XY,
+    DEFAULT_SETTLE_SECONDS,
     DEFAULT_YIELD_SECONDS,
     HUESTREAM_CHANNEL_SIZE,
     HUESTREAM_HEADER,
@@ -601,7 +602,9 @@ class EntertainmentEngine:
         self._cancel_pause()
         self._notify()
 
-    async def async_release(self, seconds: float) -> None:
+    async def async_release(
+        self, seconds: float, settle_seconds: float = DEFAULT_SETTLE_SECONDS
+    ) -> None:
         """Stop driving these lights until a new session genuinely begins.
 
         Unlike pause, this discards the pending restore target immediately:
@@ -639,6 +642,19 @@ class EntertainmentEngine:
         set could be undone within a fraction of a second by a stale queued
         command, even though the intent (see above) already discarded the
         restore target and is not coming back.
+
+        `settle_seconds` (default 0, off) is a second and unrelated wait: not
+        a background timer like `seconds`, but a real `asyncio.sleep` this
+        call blocks on before returning to the caller. It exists for the one
+        gap the queued-command flush above cannot close — a command already
+        mid-send (past the flush point, mid-await in the drain loop) when
+        release() was called. That byte is already on the wire and cannot be
+        recalled; `settle_seconds` simply gives it wall-clock time to land on
+        the mesh before the caller's own sweep (e.g. light.turn_off) starts
+        contending for the same radio. Runs after all of the above — flush,
+        releasing flag, grace timer — are already in effect, so a concurrent
+        caller reading engine state during the wait sees "releasing", not
+        "active".
         """
         self._cancel_pause()
         self._reset_mappings()
@@ -652,6 +668,8 @@ class EntertainmentEngine:
         self._release_cancel = async_call_later(
             self._hass, resolved, self._on_release_grace_expired
         )
+        if settle_seconds > 0:
+            await asyncio.sleep(settle_seconds)
 
     def _cancel_pause(self) -> None:
         self._paused_until = None

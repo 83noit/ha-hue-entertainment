@@ -54,6 +54,18 @@ DEFAULT_YIELD_SECONDS = 2.0  # what `seconds: 0` resolves to on both services
 MAX_YIELD_SECONDS = 30.0  # hard cap, enforced at the service schema — a caller
 # that forgets resume() must not be able to suppress the lights indefinitely
 
+# release(): optional settle delay. Unlike `seconds` (a background grace
+# period the call returns immediately without waiting for), this blocks the
+# calling automation itself before the service call returns — giving a
+# command that was already mid-send when release() was called (the one gap
+# the queued-command flush can't close; "a byte already on the wire stays
+# sent") wall-clock time to actually land before the caller's own sweep
+# starts competing for the same radio. Capped far below MAX_YIELD_SECONDS:
+# this stalls whatever automation called release(), so a caller mistake here
+# should waste seconds, not tie up an alarm/bedtime sequence for 30 of them.
+DEFAULT_SETTLE_SECONDS = 0.0  # opt-in — off unless a caller asks for it
+MAX_SETTLE_SECONDS = 5.0
+
 # Dispatcher signal
 SIGNAL_ENTERTAINMENT_CHANGED = f"{DOMAIN}_entertainment_changed"
 

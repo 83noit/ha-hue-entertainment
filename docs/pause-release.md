@@ -36,6 +36,23 @@ on its next frame, and — when the TV eventually stops — the bridge would
 "restore" the lights to the state they had *before* the stream started
 (on, most likely).
 
+If your sweep runs immediately after `release` (as above) and you're still
+seeing an occasional light not take the off command, add `settle_seconds`:
+
+```yaml
+- action: hue_entertainment.release
+  data:
+    seconds: 3
+    settle_seconds: 1        # block here briefly before the sweep below runs
+- action: light.turn_off
+  target:
+    area_id: living_room
+    transition: 2
+```
+
+See "`settle_seconds` — waiting out an in-flight command" below for what
+this closes and what it doesn't.
+
 For an automation that only needs the radio quiet for a moment (a scene
 across many bulbs, an OTA update), use `pause` instead:
 
@@ -97,6 +114,43 @@ one beginning, with a fresh snapshot, not as "already active".
 **Classic mode** (the TV drives the bulbs over plain REST, no stream) has no
 session to tear down, so the grace period is the whole guarantee: commands
 are dropped for `seconds`, then the next one drives the lights again.
+
+## `settle_seconds` — waiting out an in-flight command
+
+`release` flushes anything already queued but not yet sent (step 2 above),
+which closes the most common way a stream undoes a sweep a fraction of a
+second later. It cannot close one narrower gap: a command that's already
+*mid-send* — past the flush point, in the middle of its own Zigbee service
+call — when `release` runs. That command was already on the wire before
+your call landed; nothing can recall it.
+
+`settle_seconds` (default `0`, off) is how you wait that gap out instead of
+closing it. It's not a background timer like `seconds` — it's a real block
+on the `hue_entertainment.release` call itself, applied *after* the release
+has already taken effect (queued commands flushed, session marked
+releasing, grace timer running). While your automation is paused there, any
+command that was already in flight gets the time it needs to actually land
+on the mesh, so it's done contending for the radio by the time your next
+action — typically `light.turn_off` — runs.
+
+Two things worth being clear-eyed about:
+
+- It's a statistical mitigation, not a guarantee. A slow Zigbee hop can
+  still occasionally outlast a short `settle_seconds`. Capped at 5 s (vs.
+  `seconds`' 30 s) precisely because this blocks your automation — a longer
+  wait trades a rare miss for guaranteed lag on every bedtime/away run,
+  which is usually the worse trade.
+- It only matters directly after a `release` whose caller is about to send
+  its own commands to the *same* lights right away. A `release` with
+  nothing else queued behind it, or one aimed at lights nothing else is
+  about to command, gets nothing from a nonzero `settle_seconds` beyond a
+  needless wait.
+
+If you're chasing an unreliable light and a bit of `settle_seconds` alone
+doesn't close it, the gap is probably elsewhere — e.g. a ZHA group multicast
+command that reached the coordinator but not every member, which no amount
+of waiting before you send it will fix (see your automation's own
+retry/verify logic for that case).
 
 ## The contract between them
 

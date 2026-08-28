@@ -38,6 +38,7 @@ from .const import (
     DOMAIN,
     FRAME_TIMEOUT,
     FRAME_WATCHDOG_INTERVAL,
+    MAX_SETTLE_SECONDS,
     MAX_YIELD_SECONDS,
     SIGNAL_ENTERTAINMENT_CHANGED,
 )
@@ -56,11 +57,24 @@ SERVICE_PAUSE = "pause"
 SERVICE_RESUME = "resume"
 SERVICE_RELEASE = "release"
 ATTR_SECONDS = "seconds"
+ATTR_SETTLE_SECONDS = "settle_seconds"
 
 _SECONDS_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_SECONDS, default=0): vol.All(
             vol.Coerce(float), vol.Range(min=0, max=MAX_YIELD_SECONDS)
+        ),
+    }
+)
+
+# release() only: settle_seconds blocks the calling automation itself (a real
+# asyncio.sleep before the service call returns), so it gets a much tighter
+# cap than the seconds/MAX_YIELD_SECONDS grace period below — see
+# entertainment.py's async_release docstring and const.MAX_SETTLE_SECONDS.
+_RELEASE_SCHEMA = _SECONDS_SCHEMA.extend(
+    {
+        vol.Optional(ATTR_SETTLE_SECONDS, default=0): vol.All(
+            vol.Coerce(float), vol.Range(min=0, max=MAX_SETTLE_SECONDS)
         ),
     }
 )
@@ -107,11 +121,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             # engine.async_release()'s own guaranteed local suppression —
             # see docs/pause-release.md.
             entry.runtime_data.api_server.clear_entertainment()
-            await entry.runtime_data.engine.async_release(call.data[ATTR_SECONDS])
+            await entry.runtime_data.engine.async_release(
+                call.data[ATTR_SECONDS], call.data[ATTR_SETTLE_SECONDS]
+            )
 
     hass.services.async_register(DOMAIN, SERVICE_PAUSE, _async_handle_pause, _SECONDS_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_RESUME, _async_handle_resume)
-    hass.services.async_register(DOMAIN, SERVICE_RELEASE, _async_handle_release, _SECONDS_SCHEMA)
+    hass.services.async_register(DOMAIN, SERVICE_RELEASE, _async_handle_release, _RELEASE_SCHEMA)
     return True
 
 

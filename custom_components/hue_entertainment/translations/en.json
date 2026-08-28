@@ -40,6 +40,10 @@
         "seconds": {
           "name": "Seconds",
           "description": "Grace period to wait for the TV to comply before forcing it. 0 uses a healthy default (a couple of seconds)."
+        },
+        "settle_seconds": {
+          "name": "Settle seconds",
+          "description": "Optional: block this call for this long before returning, after the release has already taken effect. Gives a command that was already mid-send when release() was called time to actually land before your own sweep (e.g. light.turn_off) starts competing for the same radio. 0 (default) skips this entirely."
         }
       }
     }

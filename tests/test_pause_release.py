@@ -324,6 +324,46 @@ class TestRelease:
         assert engine._mappings[0].pending_data is None
 
     @pytest.mark.asyncio
+    async def test_release_settle_seconds_defaults_to_no_wait(self):
+        """The default (omitted, or explicit 0) must not introduce any delay
+        — settle_seconds is opt-in, not a behaviour change for existing
+        callers that only ever pass `seconds`."""
+        engine, _ = _make_live_engine()
+        with patch.object(_ent.asyncio, "sleep", new=AsyncMock()) as fake_sleep:
+            await engine.async_release(2)
+        fake_sleep.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_release_settle_seconds_waits_the_requested_duration(self):
+        engine, _ = _make_live_engine()
+        with patch.object(_ent.asyncio, "sleep", new=AsyncMock()) as fake_sleep:
+            await engine.async_release(2, settle_seconds=1.5)
+        fake_sleep.assert_awaited_once_with(1.5)
+
+    @pytest.mark.asyncio
+    async def test_release_settle_seconds_waits_after_release_already_took_effect(self):
+        """The wait must come after the flush/releasing-flag/grace-timer work,
+        not before — a concurrent reader during the wait must already see
+        'releasing', and the queued command must already be gone, not still
+        pending until the sleep resolves."""
+        engine, _ = _make_live_engine(channels=1)
+        await engine.async_snapshot_lights()
+        engine.handle_frame(_make_v2_frame())
+        assert engine._mappings[0].dirty is True  # sanity: it really queued
+
+        state_during_sleep = {}
+
+        async def _fake_sleep(_seconds):
+            state_during_sleep["status"] = engine.status
+            state_during_sleep["dirty"] = engine._mappings[0].dirty
+            state_during_sleep["saved_states"] = engine._saved_states
+
+        with patch.object(_ent.asyncio, "sleep", new=_fake_sleep):
+            await engine.async_release(2, settle_seconds=1)
+
+        assert state_during_sleep == {"status": "releasing", "dirty": False, "saved_states": None}
+
+    @pytest.mark.asyncio
     async def test_release_prevents_the_drain_loop_from_actually_sending_it(self):
         """End-to-end version of the flush test: not just that the mapping
         looks clean, but that the drain loop — running for real on the event

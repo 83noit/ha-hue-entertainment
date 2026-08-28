@@ -541,12 +541,28 @@ async def test_release_resolves_when_tv_complies(hass: HomeAssistant) -> None:
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_release_settle_seconds_blocks_the_service_call(hass: HomeAssistant) -> None:
+    """End-to-end: settle_seconds is a real wait the service call itself
+    blocks on, not a background timer like seconds — the caller's automation
+    doesn't move on to its own next step until it elapses."""
+    entry = await _setup(hass, _entry())
+    started = asyncio.get_running_loop().time()
+    await hass.services.async_call(
+        DOMAIN, "release", {"seconds": 0, "settle_seconds": 0.3}, blocking=True
+    )
+    elapsed = asyncio.get_running_loop().time() - started
+    assert elapsed >= 0.3
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_service_schema_caps_seconds(hass: HomeAssistant) -> None:
     entry = await _setup(hass, _entry())
     with pytest.raises(vol.Invalid):
         await hass.services.async_call(DOMAIN, "pause", {"seconds": 31}, blocking=True)
     with pytest.raises(vol.Invalid):
         await hass.services.async_call(DOMAIN, "release", {"seconds": -1}, blocking=True)
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "release", {"settle_seconds": 5.1}, blocking=True)
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 

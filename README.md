@@ -67,7 +67,9 @@ for the Zigbee radio:
 - **`hue_entertainment.resume`** — end a pause early.
 - **`hue_entertainment.release`** — an intent change, e.g. a bedtime sweep that wants the lights
   off and *staying* off: forgets the pre-session state so nothing relights the room, asks the TV
-  to stop, and forces a clean teardown if it doesn't within the grace period.
+  to stop, and forces a clean teardown if it doesn't within the grace period. An optional
+  `settle_seconds` blocks the call briefly before returning, for a caller whose own sweep runs
+  immediately after.
 
 ```yaml
 - action: hue_entertainment.release
