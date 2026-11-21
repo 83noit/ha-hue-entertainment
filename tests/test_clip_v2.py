@@ -133,6 +133,29 @@ class TestModel:
         resources = clip_v2.build_resources(BRIDGE_ID, [])
         assert not _by_type(resources, "entertainment_configuration")
 
+    def test_zigbee_mac_matches_v1_uniqueid(self):
+        """Hue Essentials requires zigbee_connectivity.mac_address (observed 2026-11-21)."""
+        resources = clip_v2.build_resources(BRIDGE_ID, LIGHTS)
+        macs = [r["mac_address"] for r in _by_type(resources, "zigbee_connectivity")]
+        server = hue_api.HueAPIServer(BRIDGE_ID, "00:17:88:12:34:56", "10.0.0.2", 80, 3, LIGHTS)
+        v1 = [server._build_v1_lights()[str(i)]["uniqueid"] for i in range(1, 4)]
+        assert [f"{mac}-0b" for mac in macs] == v1
+
+    def test_light_carries_real_bridge_fields(self):
+        (light, *_) = _by_type(clip_v2.build_resources(BRIDGE_ID, LIGHTS), "light")
+        for field in (
+            "service_id",
+            "color_temperature",
+            "dynamics",
+            "alert",
+            "signaling",
+            "effects",
+            "timed_effects",
+            "powerup",
+            "product_data",
+        ):
+            assert field in light, field
+
     def test_light_names_fit_metadata_limit(self):
         long = "light." + "x" * 60
         (light,) = _by_type(clip_v2.build_resources(BRIDGE_ID, [long]), "light")

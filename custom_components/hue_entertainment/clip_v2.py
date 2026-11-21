@@ -41,6 +41,12 @@ def ref(bridge_id: str, key: str, rtype: str) -> dict[str, str]:
     return {"rid": rid(bridge_id, key, rtype), "rtype": rtype}
 
 
+def light_mac_address(entity_id: str) -> str:
+    """Stable 8-byte Zigbee address for a light (the v1 ``uniqueid`` without its endpoint)."""
+    h = uuid.uuid5(uuid.NAMESPACE_DNS, f"uniqueid-{entity_id}").hex
+    return ":".join(h[j : j + 2] for j in range(0, 16, 2))
+
+
 def software_version() -> str:
     """Bridge software version as CLIP v2 reports it, e.g. ``1.67.1967054020``."""
     major_minor = ".".join(BRIDGE_API_VERSION.split(".")[:2])
@@ -144,20 +150,56 @@ def _light_resources(b: str, light: str, light_id: int) -> list[Resource]:
             ],
         },
         {
+            # Every field a real bridge sends for a colour bulb: strict clients
+            # (Hue Essentials) reject a light missing any of them.
             "id": rid(b, light, "light"),
             "id_v1": f"/lights/{light_id}",
             "type": "light",
             "owner": ref(b, light, "device"),
             "metadata": {"name": name, "archetype": "classic_bulb", "function": "mixed"},
+            "product_data": {"function": "mixed"},
             "identify": {},
+            "service_id": 0,
             "on": {"on": True},
             "dimming": {"brightness": 100.0, "min_dim_level": 0.2},
+            "dimming_delta": {},
+            "color_temperature": {
+                "mirek": None,
+                "mirek_valid": False,
+                "mirek_schema": {"mirek_minimum": 153, "mirek_maximum": 500},
+            },
+            "color_temperature_delta": {},
             "color": {
                 "xy": {"x": 0.3127, "y": 0.329},
                 "gamut": GAMUT_C,
                 "gamut_type": "C",
             },
+            "dynamics": {
+                "status": "none",
+                "status_values": ["none", "dynamic_palette"],
+                "speed": 0.0,
+                "speed_valid": False,
+            },
+            "alert": {"action_values": ["breathe"]},
+            "signaling": {"signal_values": ["no_signal", "on_off", "on_off_color", "alternating"]},
             "mode": "normal",
+            "effects": {
+                "status_values": ["no_effect"],
+                "status": "no_effect",
+                "effect_values": ["no_effect"],
+            },
+            "timed_effects": {
+                "status_values": ["no_effect"],
+                "status": "no_effect",
+                "effect_values": ["no_effect"],
+            },
+            "powerup": {
+                "preset": "safety",
+                "configured": True,
+                "on": {"mode": "on", "on": {"on": True}},
+                "dimming": {"mode": "dimming", "dimming": {"brightness": 100.0}},
+                "color": {"mode": "color_temperature", "color_temperature": {"mirek": 366}},
+            },
         },
         {
             "id": rid(b, light, "zigbee_connectivity"),
@@ -165,6 +207,7 @@ def _light_resources(b: str, light: str, light_id: int) -> list[Resource]:
             "type": "zigbee_connectivity",
             "owner": ref(b, light, "device"),
             "status": "connected",
+            "mac_address": light_mac_address(light),
         },
         {
             "id": rid(b, light, "entertainment"),

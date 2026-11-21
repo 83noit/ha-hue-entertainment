@@ -408,8 +408,7 @@ class HueAPIServer:
     def _build_v1_lights(self) -> dict:
         lights = {}
         for i, entity_id in enumerate(self._light_entities, 1):
-            h = uuid.uuid5(uuid.NAMESPACE_DNS, f"uniqueid-{entity_id}").hex
-            uniqueid = ":".join(h[j : j + 2] for j in range(0, 16, 2)) + "-0b"
+            uniqueid = clip_v2.light_mac_address(entity_id) + "-0b"
             lights[str(i)] = {
                 "state": {
                     "on": True,
