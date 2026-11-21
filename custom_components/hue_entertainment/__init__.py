@@ -300,19 +300,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
                 await asyncio.sleep(FRAME_WATCHDOG_INTERVAL)
                 if not engine.is_active:
                     break
+                # No `break` after a teardown: a session that starts while the
+                # teardown is still restoring the lights finds this task not
+                # done() and doesn't arm its own watchdog, so keep watching
+                # (the loop ends by itself if nothing started).
                 if engine.release_forcing:
                     # release() grace period over and the TV didn't comply:
                     # tear down now rather than after a full FRAME_TIMEOUT.
                     _LOGGER.info("Release grace period over, ending the session")
                     await _async_stop_entertainment_session()
-                    break
+                    continue
                 elapsed = time.monotonic() - engine.last_frame_time
                 if elapsed > FRAME_TIMEOUT:
                     _LOGGER.warning(
                         "No entertainment frames for %.1f seconds, auto-stopping", elapsed
                     )
                     await _async_stop_entertainment_session()
-                    break
         except asyncio.CancelledError:
             pass
 
@@ -321,8 +324,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
         _LOGGER.info("Entertainment started by %s…", username[:6])
         if engine.is_active and session_owner not in (None, username):
             # Another client takes over: drop the previous client's stream so
-            # the newcomer's DTLS handshake isn't stuck behind it.
+            # the newcomer's DTLS handshake isn't stuck behind it. The room's
+            # "before" snapshot stays; listeners learn the new owner.
             dtls_server.abort_session()
+            async_dispatcher_send(hass, SIGNAL_ENTERTAINMENT_CHANGED)
         session_owner = username
         await engine.async_snapshot_lights()
         if watchdog_task is None or watchdog_task.done():

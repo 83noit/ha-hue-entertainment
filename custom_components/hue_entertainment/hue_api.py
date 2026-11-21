@@ -439,7 +439,25 @@ class HueAPIServer:
         return body if isinstance(body, dict) else None
 
     async def _set_entertainment_active(self, active: bool, username: str = "") -> None:
-        """Toggle entertainment streaming state and fire callbacks."""
+        """Toggle entertainment streaming state and fire callbacks.
+
+        Another client may take over a session (a new start), but only the
+        owner may stop it: a stop from anyone else is ignored, so a second app
+        can't end the TV's session from under it.
+        """
+        if (
+            not active
+            and username
+            and self._entertainment_active
+            and self._entertainment_owner
+            and username != self._entertainment_owner
+        ):
+            _LOGGER.warning(
+                "Ignoring a stream stop from %s: the session belongs to %s",
+                short_id(username),
+                short_id(self._entertainment_owner),
+            )
+            return
         if active:
             self._entertainment_active = True
             self._entertainment_owner = username

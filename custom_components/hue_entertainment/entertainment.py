@@ -257,6 +257,10 @@ class EntertainmentEngine:
         self.last_frame_time: float = 0.0
         self._active: bool = False
         self._saved_states: list[State] | None = None
+        # Target of a restore still on its way over the radio. A session that
+        # starts meanwhile (an app's stop-then-start) adopts it instead of
+        # snapshotting half-restored stream colours.
+        self._restoring: list[State] | None = None
         self._drain_task: asyncio.Task | None = None
         # True for as long as the drain loop is doing work — set synchronously
         # when the task is created, cleared in the loop's own `finally` (which
@@ -505,11 +509,17 @@ class EntertainmentEngine:
             # overwrite the pre-entertainment snapshot with streaming colours.
             _LOGGER.debug("Entertainment already active; keeping existing snapshot")
             return
-        states: list[State] = []
-        for mapping in self._mappings.values():
-            state = self._hass.states.get(mapping.entity_id)
-            if state is not None:
-                states.append(state)
+        if self._restoring is not None:
+            # The previous session's restore hasn't landed yet: the lights
+            # still show stream colours, so its target is the real "before".
+            states = self._restoring
+            _LOGGER.debug("Restore in flight; reusing its target as the snapshot")
+        else:
+            states = [
+                state
+                for mapping in self._mappings.values()
+                if (state := self._hass.states.get(mapping.entity_id)) is not None
+            ]
         self._saved_states = states
         self._reset_mappings()
         self._active = True
@@ -554,6 +564,7 @@ class EntertainmentEngine:
         self._saved_states = None
         self.reset_stats()
         if saved:
+            self._restoring = saved
             try:
                 await asyncio.wait_for(
                     async_reproduce_state(
@@ -571,6 +582,9 @@ class EntertainmentEngine:
             except Exception as err:  # noqa: BLE001 — best effort (e.g. ZHA already down at shutdown)
                 _LOGGER.warning("Could not restore %d lights: %s", len(saved), err)
                 return
+            finally:
+                if self._restoring is saved:
+                    self._restoring = None
             _LOGGER.info("Restored %d lights to pre-entertainment state", len(saved))
 
     async def async_pause(self, seconds: float) -> None:
