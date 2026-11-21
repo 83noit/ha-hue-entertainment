@@ -18,6 +18,7 @@ from typing import Any
 from .const import BRIDGE_API_VERSION, BRIDGE_MODEL_ID, BRIDGE_SW_VERSION
 
 _NAMESPACE = uuid.UUID("5f3c6a2e-8c1d-4b8e-9a43-0d6f2b1e7c55")
+_APPLICATION_NAMESPACE = uuid.UUID("0c7e2d84-3b9a-4f61-a5d2-6e8f1b4c9a37")
 
 BRIDGE_KEY = "bridge"
 ENTERTAINMENT_GROUP_NAME = "TV Entertainment"
@@ -29,6 +30,16 @@ GAMUT_C = {
 _NAME_MAX = 32  # CLIP v2 metadata.name limit
 
 Resource = dict[str, Any]
+
+
+def application_id(username: str) -> str:
+    """The client's public application id (``hue-application-id``, ``active_streamer``).
+
+    A real bridge returns a UUID here, distinct from the application key. The
+    username *is* the key (the credential), so it must never be shown to other
+    clients; this id is derived from it, one way, and is stable.
+    """
+    return str(uuid.uuid5(_APPLICATION_NAMESPACE, username))
 
 
 def rid(bridge_id: str, key: str, rtype: str) -> str:
@@ -267,7 +278,7 @@ def _entertainment_configuration(
         ],
     }
     if active and owner:
-        config["active_streamer"] = {"rid": owner, "rtype": "auth_v1"}
+        config["active_streamer"] = {"rid": application_id(owner), "rtype": "auth_v1"}
     return config
 
 

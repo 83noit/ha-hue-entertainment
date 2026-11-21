@@ -215,9 +215,19 @@ class HueAPIServer:
         else:
             self._link_button_expires = 0.0
 
-    def get_user_psk(self, username: str) -> str | None:
-        """Get the PSK (clientkey) for a username."""
-        return self._user_store.get_psk(username)
+    def get_user_psk(self, identity: str) -> str | None:
+        """Get the PSK (clientkey) for a DTLS identity: a username or its application id.
+
+        v1 clients (the Ambilight TV) use their username; CLIP v2 clients may
+        use the ``hue-application-id`` they got from /auth/v1.
+        """
+        psk = self._user_store.get_psk(identity)
+        if psk is not None:
+            return psk
+        for username in self._user_store.users:
+            if clip_v2.application_id(username) == identity:
+                return self._user_store.get_psk(username)
+        return None
 
     @property
     def http_port(self) -> int:
@@ -921,15 +931,16 @@ class HueAPIServer:
             _LOGGER.info("CLIP v2 client asked for %s (%s)", key, detail)
 
     async def _handle_auth_v1(self, request: web.Request) -> web.Response:
-        """GET /auth/v1 — echo the application id (= the username, as diyHue does).
+        """GET /auth/v1 — the client's application id, a UUID like a real bridge's.
 
-        Whatever the client then uses as its DTLS PSK identity is the
-        username, which the DTLS server already resolves.
+        The DTLS server accepts either it or the username as PSK identity.
         """
         username = self._clip_application_key(request)
         if username is None:
             return self._clip_response(status=403, error="unauthorized user")
-        return web.json_response({}, headers={"hue-application-id": username})
+        return web.json_response(
+            {}, headers={"hue-application-id": clip_v2.application_id(username)}
+        )
 
     async def _handle_clip_all(self, request: web.Request) -> web.Response:
         """GET /clip/v2/resource — every resource."""
@@ -1002,7 +1013,10 @@ class HueAPIServer:
             "status": "active" if self._entertainment_active else "inactive",
         }
         if self._entertainment_active and self._entertainment_owner:
-            data["active_streamer"] = {"rid": self._entertainment_owner, "rtype": "auth_v1"}
+            data["active_streamer"] = {
+                "rid": clip_v2.application_id(self._entertainment_owner),
+                "rtype": "auth_v1",
+            }
         event = {
             "creationtime": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "data": [data],

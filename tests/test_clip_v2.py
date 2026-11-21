@@ -119,7 +119,7 @@ class TestModel:
             "entertainment_configuration",
         )
         assert live["status"] == "active"
-        assert live["active_streamer"] == {"rid": USER, "rtype": "auth_v1"}
+        assert live["active_streamer"] == {"rid": clip_v2.application_id(USER), "rtype": "auth_v1"}
 
     def test_bridge_identity(self):
         resources = clip_v2.build_resources(BRIDGE_ID, LIGHTS)
@@ -198,7 +198,9 @@ class TestRoutes:
         client, _ = clip
         resp = await client.get("/auth/v1", headers=KEY)
         assert resp.status == 200
-        assert resp.headers["hue-application-id"] == USER
+        app_id = resp.headers["hue-application-id"]
+        assert app_id == clip_v2.application_id(USER)
+        assert len(app_id) == 36 and USER not in app_id.replace("-", "")
 
     @pytest.mark.parametrize("path", ["/auth/v1", "/clip/v2/resource", "/clip/v2/resource/light"])
     @pytest.mark.parametrize("headers", [{}, {"hue-application-key": "unknown"}])
@@ -256,7 +258,7 @@ class TestRoutes:
             await client.get("/clip/v2/resource/entertainment_configuration", headers=KEY)
         ).json()
         assert body["data"][0]["status"] == "active"
-        assert body["data"][0]["active_streamer"]["rid"] == USER
+        assert body["data"][0]["active_streamer"]["rid"] == clip_v2.application_id(USER)
 
     async def test_pairing_with_trailing_slash(self, clip):
         """Hue Sync for macOS pairs with POST /api/ (observed 2026-11-21)."""
@@ -403,7 +405,7 @@ class TestEventStream:
                 "id_v1": "/groups/1",
                 "type": "entertainment_configuration",
                 "status": "active",
-                "active_streamer": {"rid": USER, "rtype": "auth_v1"},
+                "active_streamer": {"rid": clip_v2.application_id(USER), "rtype": "auth_v1"},
             }
         ]
 
@@ -458,3 +460,10 @@ class TestEventStream:
         await server.async_stop()  # used to raise QueueFull
         assert queue.get_nowait() is None
         resp.close()
+
+
+def test_psk_lookup_accepts_username_or_application_id():
+    server = _server()
+    assert server.get_user_psk(USER) == "ab" * 16
+    assert server.get_user_psk(clip_v2.application_id(USER)) == "ab" * 16
+    assert server.get_user_psk(clip_v2.application_id("someone-else")) is None
