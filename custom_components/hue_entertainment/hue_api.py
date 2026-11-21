@@ -14,6 +14,7 @@ from typing import Any
 
 from aiohttp import web
 
+from . import clip_v2
 from .const import (
     BRIDGE_API_VERSION,
     BRIDGE_MODEL_ID,
@@ -140,6 +141,7 @@ class HueAPIServer:
         self._ssl_context = ssl_context
         self._https_port = https_port
         self._https_runner: web.AppRunner | None = None
+        self._clip_logged_paths: set[str] = set()
 
     def set_entertainment_callbacks(
         self,
@@ -220,7 +222,7 @@ class HueAPIServer:
         if self._ssl_context is None or self._https_runner is not None:
             return
         app = web.Application(middlewares=[_request_logger])
-        self._register_routes(app)
+        self._register_routes(app, clip=True)
         runner = web.AppRunner(app)
         await runner.setup()
         bind_addr = self._bind_ip or "0.0.0.0"
@@ -274,9 +276,17 @@ class HueAPIServer:
         ("DELETE", "/api/{username}/{resource}/{id}", "_handle_v1_delete_catchall"),
     )
 
-    def _register_routes(self, app: web.Application) -> None:
-        """Register all API routes on a standalone aiohttp app."""
-        for method, path, attr in self.ROUTES:
+    # CLIP v2, HTTPS listener only (real bridges don't serve it over plain HTTP)
+    CLIP_ROUTES: tuple[tuple[str, str, str], ...] = (
+        ("GET", "/auth/v1", "_handle_auth_v1"),
+        ("GET", "/clip/v2/resource", "_handle_clip_all"),
+        ("GET", "/clip/v2/resource/{rtype}", "_handle_clip_rtype"),
+        ("GET", "/clip/v2/resource/{rtype}/{rid}", "_handle_clip_by_id"),
+    )
+
+    def _register_routes(self, app: web.Application, clip: bool = False) -> None:
+        """Register the v1 routes (and CLIP v2 ones on HTTPS) on a standalone app."""
+        for method, path, attr in self.ROUTES + (self.CLIP_ROUTES if clip else ()):
             app.router.add_route(method, path, getattr(self, attr))
 
     async def handle(self, attr: str, request: web.Request) -> web.Response:
@@ -388,13 +398,11 @@ class HueAPIServer:
         if not self._light_entities:
             return {}
         light_ids = [str(i) for i in range(1, len(self._light_entities) + 1)]
-        locations = {}
-        for i in range(1, len(self._light_entities) + 1):
-            x = -1.0 + (2.0 * (i - 1) / max(len(self._light_entities) - 1, 1))
-            locations[str(i)] = [round(x, 4), 1.0, 0.0]
+        positions = clip_v2.synthetic_positions(len(self._light_entities))
+        locations = dict(zip(light_ids, positions, strict=True))
         return {
             "1": {
-                "name": "TV Entertainment",
+                "name": clip_v2.ENTERTAINMENT_GROUP_NAME,
                 "lights": light_ids,
                 "sensors": [],
                 "type": "Entertainment",
@@ -814,3 +822,73 @@ class HueAPIServer:
                 }
             ]
         )
+
+    # ---------------------------------------------------------------------------
+    # CLIP v2 (HTTPS only)
+    # ---------------------------------------------------------------------------
+
+    def _clip_application_key(self, request: web.Request) -> str | None:
+        """Paired username from the ``hue-application-key`` header, or None."""
+        key = request.headers.get("hue-application-key", "")
+        if key and self._user_store.get_psk(key) is not None:
+            return key
+        return None
+
+    @staticmethod
+    def _clip_response(
+        data: list[dict] | None = None, status: int = 200, error: str | None = None
+    ) -> web.Response:
+        return web.json_response(clip_v2.envelope(data, [error] if error else None), status=status)
+
+    def _clip_resources(self) -> list[dict]:
+        return clip_v2.build_resources(
+            self._bridge_id,
+            self._light_entities,
+            active=self._entertainment_active,
+            owner=self._entertainment_owner,
+        )
+
+    def _clip_log_once(self, request: web.Request, detail: str) -> None:
+        """Log what an official client asked for that we don't serve (once per path)."""
+        key = f"{request.method} {request.path}"
+        if key not in self._clip_logged_paths:
+            self._clip_logged_paths.add(key)
+            _LOGGER.info("CLIP v2 client asked for %s (%s)", key, detail)
+
+    async def _handle_auth_v1(self, request: web.Request) -> web.Response:
+        """GET /auth/v1 — echo the application id (= the username, as diyHue does).
+
+        Whatever the client then uses as its DTLS PSK identity is the
+        username, which the DTLS server already resolves.
+        """
+        username = self._clip_application_key(request)
+        if username is None:
+            return self._clip_response(status=403, error="unauthorized user")
+        return web.json_response({}, headers={"hue-application-id": username})
+
+    async def _handle_clip_all(self, request: web.Request) -> web.Response:
+        """GET /clip/v2/resource — every resource."""
+        if self._clip_application_key(request) is None:
+            return self._clip_response(status=403, error="unauthorized user")
+        return self._clip_response(self._clip_resources())
+
+    async def _handle_clip_rtype(self, request: web.Request) -> web.Response:
+        """GET /clip/v2/resource/{rtype} — empty list for types we don't model."""
+        if self._clip_application_key(request) is None:
+            return self._clip_response(status=403, error="unauthorized user")
+        rtype = request.match_info["rtype"]
+        data = [r for r in self._clip_resources() if r["type"] == rtype]
+        if not data:
+            self._clip_log_once(request, "not modelled, empty list")
+        return self._clip_response(data)
+
+    async def _handle_clip_by_id(self, request: web.Request) -> web.Response:
+        """GET /clip/v2/resource/{rtype}/{rid}."""
+        if self._clip_application_key(request) is None:
+            return self._clip_response(status=403, error="unauthorized user")
+        rtype, wanted = request.match_info["rtype"], request.match_info["rid"]
+        data = [r for r in self._clip_resources() if r["type"] == rtype and r["id"] == wanted]
+        if not data:
+            self._clip_log_once(request, "not found")
+            return self._clip_response(status=404, error="Not Found")
+        return self._clip_response(data)
