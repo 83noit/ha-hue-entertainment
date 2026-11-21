@@ -29,6 +29,7 @@ from .user_store import UserStore
 _LOGGER = logging.getLogger(__name__)
 
 EVENTSTREAM_KEEPALIVE = 10.0  # seconds between keepalive comments on /eventstream
+_HTTPS_SHUTDOWN_TIMEOUT = 2.0  # seconds open event streams get to finish on stop
 
 
 _PROXY_HEADERS = (
@@ -255,7 +256,9 @@ class HueAPIServer:
             return
         app = web.Application(middlewares=[_lan_only, _request_logger])
         self._register_routes(app, clip=True)
-        runner = web.AppRunner(app)
+        # Short shutdown: an event-stream client stuck mid-write must not hold
+        # up unload for aiohttp's default 60 s.
+        runner = web.AppRunner(app, shutdown_timeout=_HTTPS_SHUTDOWN_TIMEOUT)
         await runner.setup()
         bind_addr = self._bind_ip or "0.0.0.0"
         site = web.TCPSite(runner, bind_addr, self._https_port, ssl_context=self._ssl_context)
@@ -269,8 +272,13 @@ class HueAPIServer:
 
     async def async_stop(self) -> None:
         """Stop serving."""
-        for queue in self._event_queues:
-            queue.put_nowait(None)  # end open event streams so cleanup doesn't wait on them
+        for queue in list(self._event_queues):
+            # End open event streams so cleanup doesn't wait on them. A client
+            # that stopped reading has a full queue: empty it first, so the end
+            # marker always fits (an exception here would leave the ports bound).
+            while not queue.empty():
+                queue.get_nowait()
+            queue.put_nowait(None)
         if self._http_host is not None:
             self._http_host.detach(self)
         if self._http_runner:
@@ -1032,7 +1040,7 @@ class HueAPIServer:
                     break
                 message = f"id: {int(time.time())}:0\ndata: {json.dumps([event])}\n\n"
                 await resp.write(message.encode())
-        except ConnectionResetError:
+        except (ConnectionError, TimeoutError):
             pass  # client went away
         finally:
             self._event_queues.discard(queue)

@@ -446,3 +446,15 @@ class TestEventStream:
         rest = await asyncio.wait_for(resp.content.read(), 2)
         assert b"data:" not in rest
         assert not server._event_queues
+
+    async def test_stop_with_a_stalled_client(self, clip):
+        """A client that never reads fills its queue; stopping must still work."""
+        client, server = clip
+        resp = await client.get("/eventstream/clip/v2", headers=KEY)
+        await resp.content.readline()
+        (queue,) = server._event_queues
+        for _ in range(queue.maxsize):
+            queue.put_nowait({"type": "update"})
+        await server.async_stop()  # used to raise QueueFull
+        assert queue.get_nowait() is None
+        resp.close()
