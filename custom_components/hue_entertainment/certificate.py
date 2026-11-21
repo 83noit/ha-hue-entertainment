@@ -113,11 +113,15 @@ def certificate_fingerprint(path: Path) -> str:
     return ":".join(digest[i : i + 2] for i in range(0, len(digest), 2)).upper()
 
 
-def create_ssl_context(path: Path) -> ssl.SSLContext:
-    """Server-side TLS context presenting the bridge certificate."""
+def create_ssl_context(path: Path, key_path: Path | None = None) -> ssl.SSLContext:
+    """Server-side TLS context presenting the bridge certificate.
+
+    ``path`` holds the certificate (plus any chain), and the key too unless
+    ``key_path`` is given.
+    """
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.set_ciphers(TLS12_CIPHERS)  # TLS 1.2 suite; TLS 1.3 suites keep their defaults
     ctx.set_ecdh_curve("prime256v1")
-    ctx.load_cert_chain(path)
+    ctx.load_cert_chain(path, key_path)
     return ctx

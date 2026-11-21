@@ -168,6 +168,10 @@ async def main() -> None:
     parser.add_argument("--https-port", type=int, default=const.HTTPS_PORT)
     parser.add_argument("--dtls-port", type=int, default=const.DEFAULT_ENTERTAINMENT_PORT)
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
+    parser.add_argument(
+        "--cert", type=Path, help="serve this certificate (+ chain) instead of the generated one"
+    )
+    parser.add_argument("--key", type=Path, help="private key for --cert")
     args = parser.parse_args()
 
     args.data_dir.mkdir(parents=True, exist_ok=True)
@@ -185,8 +189,13 @@ async def main() -> None:
 
     ssl_context = None
     if not args.no_https:
-        pem = certificate.ensure_certificate(args.data_dir / "bridge.pem", bid)
-        ssl_context = certificate.create_ssl_context(pem)
+        if args.cert:
+            pem = args.cert
+            ssl_context = certificate.create_ssl_context(args.cert, args.key)
+            LOG.info("Serving the supplied certificate %s", args.cert)
+        else:
+            pem = certificate.ensure_certificate(args.data_dir / "bridge.pem", bid)
+            ssl_context = certificate.create_ssl_context(pem)
         log_tls_alerts(ssl_context)
         LOG.info("Certificate SHA-256 %s", certificate.certificate_fingerprint(pem))
 
