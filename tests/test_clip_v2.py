@@ -235,6 +235,17 @@ class TestRoutes:
         assert body["data"][0]["status"] == "active"
         assert body["data"][0]["active_streamer"]["rid"] == USER
 
+    async def test_pairing_with_trailing_slash(self, clip):
+        """Hue Sync for macOS pairs with POST /api/ (observed 2026-11-21)."""
+        client, server = clip
+        server.set_link_button(True)
+        resp = await client.post(
+            "/api/", json={"devicetype": "HueSync#mac", "generateclientkey": True}
+        )
+        success = (await resp.json())[0]["success"]
+        assert set(success) == {"username", "clientkey"}
+        assert server.get_user_psk(success["username"]) == success["clientkey"]
+
     async def test_v1_still_served_alongside(self, clip):
         client, _ = clip
         resp = await client.get("/api/config")

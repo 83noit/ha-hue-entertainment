@@ -312,6 +312,9 @@ class HueAPIServer:
 
     # CLIP v2, HTTPS listener only (real bridges don't serve it over plain HTTP)
     CLIP_ROUTES: tuple[tuple[str, str, str], ...] = (
+        # Hue Sync (desktop) pairs with POST /api/ — trailing slash. Kept off
+        # the shared v1 table: on hass.http, /api/ is Home Assistant's own.
+        ("POST", "/api/", "_handle_create_user"),
         ("GET", "/auth/v1", "_handle_auth_v1"),
         ("GET", "/clip/v2/resource", "_handle_clip_all"),
         ("GET", "/clip/v2/resource/{rtype}", "_handle_clip_rtype"),
