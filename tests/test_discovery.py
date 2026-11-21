@@ -151,6 +151,19 @@ class TestServiceInfoConstruction:
         assert kwargs["port"] == 9443
 
     @pytest.mark.asyncio
+    async def test_https_advertised_like_a_real_bridge(self):
+        """With the HTTPS listener up: port 443 and a lower-case bridgeid."""
+        mock_zc_cls, mock_zc, mock_info_cls, _ = _make_mocks()
+        mock_zc.async_register_service = AsyncMock()
+        with patch.object(_discovery, "AsyncServiceInfo", mock_info_cls):
+            await _make_discovery(
+                async_zeroconf=mock_zc, port=80, bridge_id="001788FFFE123456"
+            ).async_start(https=True)
+        _, kwargs = mock_info_cls.call_args
+        assert kwargs["port"] == 443
+        assert kwargs["properties"]["bridgeid"] == "001788fffe123456"
+
+    @pytest.mark.asyncio
     async def test_server_name_format(self):
         mock_zc_cls, mock_zc, mock_info_cls, _ = _make_mocks()
         mock_zc.async_register_service = AsyncMock()

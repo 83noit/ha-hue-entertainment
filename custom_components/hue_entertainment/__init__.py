@@ -437,8 +437,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
             raise ConfigEntryNotReady(
                 f"Cannot bind Hue bridge ports (http={http_port}, dtls={ent_port}): {err}"
             ) from err
-        await discovery.async_start()
         await _async_start_https()
+        # Advertised after HTTPS starts: the record says whether it is up
+        await discovery.async_start(https=entry.runtime_data.https_status == HTTPS_LISTENING)
         _LOGGER.info(
             "Hue Entertainment Bridge started: bridge_id=%s, http=%s:%d, dtls=:%d, lights=%d, users=%d",
             bridge_id,

@@ -7,7 +7,7 @@ import socket
 
 from zeroconf.asyncio import AsyncServiceInfo, AsyncZeroconf
 
-from .const import BRIDGE_MODEL_ID
+from .const import BRIDGE_MODEL_ID, HTTPS_PORT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,8 +28,14 @@ class HueBridgeDiscovery:
         self._zeroconf = async_zeroconf  # HA's shared instance — never closed here
         self._service_info: AsyncServiceInfo | None = None
 
-    async def async_start(self) -> None:
-        """Register the mDNS service."""
+    async def async_start(self, https: bool = False) -> None:
+        """Register the mDNS service.
+
+        With ``https`` (the CLIP v2 listener is up) advertise it like a real
+        bridge: port 443 and a lower-case ``bridgeid``. Otherwise keep the
+        HTTP port and the upper-case id the Ambilight TV has always seen (it
+        only uses the address; it ignores the port).
+        """
         last6 = self._bridge_id[-6:].upper()
         service_name = f"Philips Hue - {last6}._hue._tcp.local."
 
@@ -37,9 +43,9 @@ class HueBridgeDiscovery:
             type_="_hue._tcp.local.",
             name=service_name,
             addresses=[socket.inet_aton(self._host_ip)],
-            port=self._port,
+            port=HTTPS_PORT if https else self._port,
             properties={
-                "bridgeid": self._bridge_id.upper(),
+                "bridgeid": self._bridge_id.lower() if https else self._bridge_id.upper(),
                 "modelid": BRIDGE_MODEL_ID,
             },
             server=f"philips-hue-{last6.lower()}.local.",
@@ -50,7 +56,7 @@ class HueBridgeDiscovery:
             "mDNS: advertising %s at %s:%d",
             service_name,
             self._host_ip,
-            self._port,
+            self._service_info.port,
         )
 
     async def async_stop(self) -> None:
