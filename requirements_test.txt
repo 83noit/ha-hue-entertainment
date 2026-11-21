@@ -1,5 +1,6 @@
 # Test/lint toolchain (CI and local venv). Runtime deps come from Home Assistant itself.
 cffi>=1.17
+cryptography>=42  # HA core dependency; listed for the plain-pytest unit tests
 aiohttp>=3.10
 zeroconf>=0.132
 pytest>=8

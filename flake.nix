@@ -18,6 +18,7 @@
           packages = [
             python
             pythonPkgs.cffi
+            pythonPkgs.cryptography
             pythonPkgs.pytest
             pythonPkgs.pytest-asyncio
             pythonPkgs.aiohttp
