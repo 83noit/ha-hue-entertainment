@@ -79,9 +79,32 @@ async def _request_logger(
     request: web.Request,
     handler: Callable[[web.Request], Awaitable[web.StreamResponse]],
 ) -> web.StreamResponse:
-    """Log every request at DEBUG — shows exactly which endpoints the TV hits."""
-    resp = await handler(request)
-    _LOGGER.debug("%s %s %s -> %d", request.remote, request.method, _log_path(request), resp.status)
+    """Log every request at DEBUG — shows exactly which endpoints a client hits.
+
+    Includes requests no route matched (aiohttp raises those as HTTPException
+    before any handler runs), which is how a client probing a path we don't
+    serve shows up.
+    """
+    try:
+        resp = await handler(request)
+    except web.HTTPException as exc:
+        _LOGGER.debug(
+            "%s %s %s %s -> %d (no route)",
+            request.remote,
+            request.scheme,
+            request.method,
+            request.path_qs,
+            exc.status,
+        )
+        raise
+    _LOGGER.debug(
+        "%s %s %s %s -> %d",
+        request.remote,
+        request.scheme,
+        request.method,
+        _log_path(request),
+        resp.status,
+    )
     return resp
 
 
@@ -308,7 +331,14 @@ class HueAPIServer:
         """Dispatch a request to a handler by attribute name (used by ha_http views)."""
         handler: Callable[[web.Request], Awaitable[web.Response]] = getattr(self, attr)
         resp = await handler(request)
-        _LOGGER.debug("%s %s %s -> %d", request.remote, request.method, _log_path(request), resp.status)
+        _LOGGER.debug(
+            "%s %s %s %s -> %d",
+            request.remote,
+            request.scheme,
+            request.method,
+            _log_path(request),
+            resp.status,
+        )
         return resp
 
     # ---------------------------------------------------------------------------
