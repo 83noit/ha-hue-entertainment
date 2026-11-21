@@ -3,7 +3,8 @@
 Official Hue clients check the bridge's certificate. The shape follows the
 diyHue emulator, which the Samsung Hue Sync app is reported to accept: a
 self-signed EC P-256 certificate whose subject CN is the bridge id and whose
-serial number is that id read as hex, backdated to 2017.
+serial number is that id read as hex, valid 2017-01-01 to 2038-01-19, with
+the extensions real bridge certificates carry.
 
 Uses ``cryptography``, a Home Assistant core dependency (no extra
 requirement). Everything here is blocking: call it from the executor.
@@ -26,7 +27,8 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 _LOGGER = logging.getLogger(__name__)
 
 NOT_BEFORE = datetime.datetime(2017, 1, 1, tzinfo=datetime.UTC)
-VALIDITY = datetime.timedelta(days=7670)
+# Real bridge certificates end at the 32-bit time_t limit
+NOT_AFTER = datetime.datetime(2038, 1, 19, 3, 14, 7, tzinfo=datetime.UTC)
 TLS12_CIPHERS = "ECDHE-ECDSA-AES128-GCM-SHA256"
 
 
@@ -48,12 +50,12 @@ def build_certificate(bridge_id: str) -> tuple[ec.EllipticCurvePrivateKey, x509.
         .public_key(key.public_key())
         .serial_number(int(bridge_id, 16))
         .not_valid_before(NOT_BEFORE)
-        .not_valid_after(NOT_BEFORE + VALIDITY)
+        .not_valid_after(NOT_AFTER)
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(
             x509.KeyUsage(
                 digital_signature=True,
-                key_encipherment=True,
+                key_encipherment=False,
                 content_commitment=False,
                 data_encipherment=False,
                 key_agreement=False,
@@ -67,7 +69,13 @@ def build_certificate(bridge_id: str) -> tuple[ec.EllipticCurvePrivateKey, x509.
         .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
         .add_extension(ski, critical=False)
         .add_extension(
-            x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(ski), critical=False
+            # keyid + issuer + serial, like a real bridge certificate
+            x509.AuthorityKeyIdentifier(
+                key_identifier=ski.digest,
+                authority_cert_issuer=[x509.DirectoryName(name)],
+                authority_cert_serial_number=int(bridge_id, 16),
+            ),
+            critical=False,
         )
         .sign(key, hashes.SHA256())
     )

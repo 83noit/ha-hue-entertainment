@@ -39,9 +39,11 @@ class TestShape:
     def test_serial_is_bridge_id(self, cert):
         assert cert.serial_number == int(BRIDGE_ID, 16)
 
-    def test_validity_backdated_to_2017(self, cert):
+    def test_validity_2017_to_2038(self, cert):
         assert cert.not_valid_before_utc == datetime.datetime(2017, 1, 1, tzinfo=datetime.UTC)
-        assert cert.not_valid_after_utc - cert.not_valid_before_utc == datetime.timedelta(days=7670)
+        assert cert.not_valid_after_utc == datetime.datetime(
+            2038, 1, 19, 3, 14, 7, tzinfo=datetime.UTC
+        )
 
     def test_ec_p256_sha256(self, cert):
         key = cert.public_key()
@@ -56,8 +58,8 @@ class TestShape:
     def test_key_usage(self, cert):
         ext = cert.extensions.get_extension_for_class(x509.KeyUsage)
         assert ext.critical
-        assert ext.value.digital_signature and ext.value.key_encipherment
-        assert not ext.value.key_cert_sign
+        assert ext.value.digital_signature
+        assert not ext.value.key_encipherment and not ext.value.key_cert_sign
 
     def test_server_auth(self, cert):
         eku = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
@@ -67,6 +69,8 @@ class TestShape:
         ski = cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value
         aki = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value
         assert aki.key_identifier == ski.digest
+        assert aki.authority_cert_serial_number == int(BRIDGE_ID, 16)
+        assert [n.value for n in aki.authority_cert_issuer] == [cert.issuer]
         with pytest.raises(x509.ExtensionNotFound):
             cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
 
