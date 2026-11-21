@@ -16,7 +16,12 @@ import voluptuous as vol
 from homeassistant.components.network import async_get_source_ip
 from homeassistant.components.zeroconf import async_get_async_instance
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT_STOP, Platform
+from homeassistant.const import (
+    EVENT_HOMEASSISTANT_STARTED,
+    EVENT_HOMEASSISTANT_STOP,
+    STATE_UNAVAILABLE,
+    Platform,
+)
 from homeassistant.core import CoreState, Event, HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryNotReady, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
@@ -376,6 +381,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
     # TV "classic" mode (no DTLS stream): per-light REST commands follow the
     # same Zigbee-paced drain loop.
     api_server.set_light_command_callback(engine.handle_light_command)
+    # CLIP v2 reports unreachable lights as connectivity_issue
+    api_server.set_light_unavailable_check(
+        lambda entity_id: (
+            (state := hass.states.get(entity_id)) is None or state.state == STATE_UNAVAILABLE
+        )
+    )
 
     # Runtime objects for the platforms, the options flow and diagnostics
     entry.runtime_data = HueEntertainmentData(

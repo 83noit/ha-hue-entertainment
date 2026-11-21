@@ -872,3 +872,13 @@ async def test_options_refuse_pairing_in_the_same_submit_as_enabling_https(hass,
     assert result["errors"] == {CONF_PAIR_NOW: "pair_after_https"}
     assert CONF_HTTPS_ENABLED not in entry.options
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_unavailable_ha_light_shows_connectivity_issue(hass: HomeAssistant) -> None:
+    hass.states.async_set("light.a", "unavailable")
+    hass.states.async_set("light.b", "on")
+    entry = await _setup(hass, _entry())
+    resources = entry.runtime_data.api_server._clip_resources()
+    status = [r["status"] for r in resources if r["type"] == "zigbee_connectivity"]
+    assert status == ["connectivity_issue", "connected"]
+    assert await hass.config_entries.async_unload(entry.entry_id)

@@ -131,6 +131,20 @@ class TestModel:
         assert bridge_device["product_data"]["model_id"] == "BSB002"
         assert bridge_device["product_data"]["software_version"] == "1.67.1967054020"
 
+    def test_lights_report_streaming_mode(self):
+        idle = _by_type(clip_v2.build_resources(BRIDGE_ID, LIGHTS), "light")
+        live = _by_type(clip_v2.build_resources(BRIDGE_ID, LIGHTS, active=True), "light")
+        assert {r["mode"] for r in idle} == {"normal"}
+        assert {r["mode"] for r in live} == {"streaming"}
+
+    def test_unreachable_light_reports_connectivity_issue(self):
+        resources = clip_v2.build_resources(
+            BRIDGE_ID, LIGHTS, unavailable=frozenset({"light.center"})
+        )
+        status = {r["mac_address"]: r["status"] for r in _by_type(resources, "zigbee_connectivity")}
+        assert status[clip_v2.light_mac_address("light.center")] == "connectivity_issue"
+        assert status[clip_v2.light_mac_address("light.left")] == "connected"
+
     def test_no_lights_no_configuration(self):
         resources = clip_v2.build_resources(BRIDGE_ID, [])
         assert not _by_type(resources, "entertainment_configuration")
@@ -414,7 +428,16 @@ class TestEventStream:
         await client.put(CONFIG_PATH, json={"action": "start"}, headers=KEY)
         event = await _read_event(resp)
         assert event["type"] == "update"
-        assert event["data"] == [
+        assert event["data"][1:] == [
+            {
+                "id": clip_v2.rid(BRIDGE_ID, light, "light"),
+                "id_v1": f"/lights/{i}",
+                "type": "light",
+                "mode": "streaming",
+            }
+            for i, light in enumerate(LIGHTS, 1)
+        ]
+        assert event["data"][:1] == [
             {
                 "id": CONFIG_ID,
                 "id_v1": "/groups/1",
@@ -425,7 +448,9 @@ class TestEventStream:
         ]
 
         await client.put(CONFIG_PATH, json={"action": "stop"}, headers=KEY)
-        assert (await _read_event(resp))["data"][0]["status"] == "inactive"
+        stopped = (await _read_event(resp))["data"]
+        assert stopped[0]["status"] == "inactive"
+        assert {r["mode"] for r in stopped[1:]} == {"normal"}
         resp.close()
 
     async def test_watchdog_teardown_reports_inactive(self, clip):

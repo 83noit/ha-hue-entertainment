@@ -82,8 +82,13 @@ def build_resources(
     *,
     active: bool = False,
     owner: str | None = None,
+    unavailable: frozenset[str] = frozenset(),
 ) -> list[Resource]:
-    """Every CLIP v2 resource the bridge exposes."""
+    """Every CLIP v2 resource the bridge exposes.
+
+    ``unavailable``: light entities Home Assistant can't reach, reported as
+    ``connectivity_issue`` like a real bridge does for an unreachable bulb.
+    """
     b = bridge_id.lower()
     resources: list[Resource] = [
         {
@@ -135,7 +140,9 @@ def build_resources(
         _grouped_light(b, HOME_KEY, owner=ref(b, BRIDGE_KEY, "bridge_home"), id_v1="/groups/0"),
     ]
     for i, light in enumerate(lights, 1):
-        resources.extend(_light_resources(b, light, i))
+        resources.extend(
+            _light_resources(b, light, i, streaming=active, reachable=light not in unavailable)
+        )
     if lights:
         resources.extend(_room(b, lights))
         resources.append(_entertainment_configuration(b, lights, active=active, owner=owner))
@@ -175,7 +182,9 @@ def _room(b: str, lights: list[str]) -> list[Resource]:
     ]
 
 
-def _light_resources(b: str, light: str, light_id: int) -> list[Resource]:
+def _light_resources(
+    b: str, light: str, light_id: int, *, streaming: bool = False, reachable: bool = True
+) -> list[Resource]:
     name = light[:_NAME_MAX]
     return [
         {
@@ -231,7 +240,8 @@ def _light_resources(b: str, light: str, light_id: int) -> list[Resource]:
             },
             "alert": {"action_values": ["breathe"]},
             "signaling": {"signal_values": ["no_signal", "on_off", "on_off_color", "alternating"]},
-            "mode": "normal",
+            # A real bridge reports member lights as streaming during a session
+            "mode": "streaming" if streaming else "normal",
             "effects": {
                 "status_values": ["no_effect"],
                 "status": "no_effect",
@@ -255,7 +265,7 @@ def _light_resources(b: str, light: str, light_id: int) -> list[Resource]:
             "id_v1": f"/lights/{light_id}",
             "type": "zigbee_connectivity",
             "owner": ref(b, light, "device"),
-            "status": "connected",
+            "status": "connected" if reachable else "connectivity_issue",
             "mac_address": light_mac_address(light),
         },
         {

@@ -171,6 +171,7 @@ class HueAPIServer:
         self._https_port = https_port
         self._https_runner: web.AppRunner | None = None
         self._clip_logged_paths: set[str] = set()
+        self._light_unavailable: Callable[[str], bool] = lambda _entity: False
         # One queue per open /eventstream/clip/v2 connection; None ends it
         self._event_queues: set[asyncio.Queue[dict | None]] = set()
 
@@ -916,12 +917,17 @@ class HueAPIServer:
     ) -> web.Response:
         return web.json_response(clip_v2.envelope(data, [error] if error else None), status=status)
 
+    def set_light_unavailable_check(self, check: Callable[[str], bool]) -> None:
+        """Tell the server how to know a light entity is currently unreachable."""
+        self._light_unavailable = check
+
     def _clip_resources(self) -> list[dict]:
         return clip_v2.build_resources(
             self._bridge_id,
             self._light_entities,
             active=self._entertainment_active,
             owner=self._entertainment_owner,
+            unavailable=frozenset(e for e in self._light_entities if self._light_unavailable(e)),
         )
 
     def _clip_log_once(self, request: web.Request, detail: str) -> None:
@@ -1005,7 +1011,7 @@ class HueAPIServer:
         return self._clip_response(status=405, error="method not allowed")
 
     def _publish_configuration_update(self) -> None:
-        """Send an ``update`` event for the entertainment configuration's status."""
+        """Send an ``update`` event: the configuration's status and its lights' mode."""
         if not self._event_queues or not self._light_entities:
             return
         data: dict[str, Any] = {
@@ -1019,9 +1025,19 @@ class HueAPIServer:
                 "rid": clip_v2.application_id(self._entertainment_owner),
                 "rtype": "auth_v1",
             }
+        mode = "streaming" if self._entertainment_active else "normal"
+        lights = [
+            {
+                "id": clip_v2.rid(self._bridge_id, entity, "light"),
+                "id_v1": f"/lights/{i}",
+                "type": "light",
+                "mode": mode,
+            }
+            for i, entity in enumerate(self._light_entities, 1)
+        ]
         event = {
             "creationtime": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "data": [data],
+            "data": [data, *lights],
             "id": str(uuid.uuid4()),
             "type": "update",
         }
