@@ -882,3 +882,19 @@ async def test_unavailable_ha_light_shows_connectivity_issue(hass: HomeAssistant
     status = [r["status"] for r in resources if r["type"] == "zigbee_connectivity"]
     assert status == ["connectivity_issue", "connected"]
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_ssdp_only_with_https(hass, https_port) -> None:
+    from unittest.mock import MagicMock  # noqa: PLC0415
+
+    responder = MagicMock(async_start=AsyncMock(return_value=True), async_stop=AsyncMock())
+    with patch("custom_components.hue_entertainment.SsdpResponder", return_value=responder) as cls:
+        entry = await _setup(hass, _entry())
+        cls.assert_not_called()
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+        entry2 = await _setup(hass, _entry(**{CONF_HTTPS_ENABLED: True}))
+        cls.assert_called_once()
+        assert entry2.runtime_data.ssdp is responder
+        assert await hass.config_entries.async_unload(entry2.entry_id)
+        responder.async_stop.assert_awaited()

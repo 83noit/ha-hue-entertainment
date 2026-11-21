@@ -62,6 +62,7 @@ from .entertainment import EntertainmentEngine, FrameMailbox, LightMapping
 from .ha_http import async_get_http_host, resolve_use_ha_http
 from .https import async_set_https_issue, cert_path, ha_holds_https_port
 from .hue_api import HueAPIServer
+from .ssdp import SsdpResponder
 from .user_store import UserStore
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
@@ -160,6 +161,7 @@ class HueEntertainmentData:
     cancel_watchdog: Callable[[], None]
     https_status: str = HTTPS_DISABLED
     cert_fingerprint: str | None = None
+    ssdp: SsdpResponder | None = None
 
 
 type HueEntertainmentConfigEntry = ConfigEntry[HueEntertainmentData]
@@ -438,8 +440,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
                 f"Cannot bind Hue bridge ports (http={http_port}, dtls={ent_port}): {err}"
             ) from err
         await _async_start_https()
+        https_up = entry.runtime_data.https_status == HTTPS_LISTENING
         # Advertised after HTTPS starts: the record says whether it is up
-        await discovery.async_start(https=entry.runtime_data.https_status == HTTPS_LISTENING)
+        await discovery.async_start(https=https_up)
+        if https_up:
+            # SSDP too, for official apps (diyHue answers both); Ambilight only needs mDNS
+            ssdp = SsdpResponder(host_ip, http_port, bridge_id, mac)
+            if await ssdp.async_start():
+                entry.runtime_data.ssdp = ssdp
         _LOGGER.info(
             "Hue Entertainment Bridge started: bridge_id=%s, http=%s:%d, dtls=:%d, lights=%d, users=%d",
             bridge_id,
@@ -459,6 +467,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
         await dtls_server.async_stop()
         await api_server.async_stop()
         await discovery.async_stop()
+        if entry.runtime_data.ssdp is not None:
+            await entry.runtime_data.ssdp.async_stop()
         await engine.async_restore_lights()
         _LOGGER.info("Hue Entertainment Bridge stopped")
 
@@ -511,6 +521,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: HueEntertainmentConfigE
     await data.dtls_server.async_stop()
     await data.api_server.async_stop()
     await data.discovery.async_stop()
+    if data.ssdp is not None:
+        await data.ssdp.async_stop()
     async_set_https_issue(hass, None)
     await data.engine.async_restore_lights()
     return unload_ok

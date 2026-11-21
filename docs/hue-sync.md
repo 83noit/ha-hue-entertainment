@@ -69,6 +69,11 @@ If port 443 becomes unavailable later (say, after installing an add-on), a
 The TV must also reach the Home Assistant host on **TCP 443**, in addition to
 TCP 80 and UDP 2100.
 
+With the option on, the bridge also advertises itself the way a real bridge
+does: mDNS announces port 443, and it answers SSDP (UPnP) searches on UDP 1900,
+sharing that port with Home Assistant's own SSDP. If 1900 can't be shared,
+SSDP simply stays off (the log says so); mDNS still works.
+
 ## Known limitations
 
 - **One entertainment area**, built from the lights you selected (channel
