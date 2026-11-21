@@ -243,3 +243,153 @@ class TestRoutes:
     async def test_clip_not_on_plain_http(self, plain):
         for path in ("/auth/v1", "/clip/v2/resource"):
             assert (await plain.get(path, headers=KEY)).status == 404
+
+
+# ---------------------------------------------------------------------------
+# Start / stop and event stream
+# ---------------------------------------------------------------------------
+
+import asyncio  # noqa: E402
+import json  # noqa: E402
+from unittest.mock import AsyncMock, patch  # noqa: E402
+
+CONFIG_ID = clip_v2.entertainment_configuration_id(BRIDGE_ID)
+CONFIG_PATH = f"/clip/v2/resource/entertainment_configuration/{CONFIG_ID}"
+
+
+async def _read_event(resp) -> dict:
+    """Next ``data:`` message from an SSE response (skips comments)."""
+    buf = ""
+    while True:
+        chunk = await asyncio.wait_for(resp.content.readline(), 2)
+        line = chunk.decode()
+        if line.startswith("data: "):
+            buf = line[len("data: ") :]
+        elif line == "\n" and buf:
+            return json.loads(buf)[0]
+
+
+@pytest.mark.asyncio
+class TestStartStop:
+    async def test_start_and_stop_drive_callbacks(self, clip):
+        client, server = clip
+        on_start, on_stop = AsyncMock(), AsyncMock()
+        server.set_entertainment_callbacks(on_start, on_stop)
+
+        resp = await client.put(CONFIG_PATH, json={"action": "start"}, headers=KEY)
+        assert resp.status == 200
+        assert await resp.json() == {
+            "errors": [],
+            "data": [{"rid": CONFIG_ID, "rtype": "entertainment_configuration"}],
+        }
+        on_start.assert_awaited_once_with(USER)
+        assert server.entertainment_active and server.entertainment_owner == USER
+
+        await client.put(CONFIG_PATH, json={"action": "stop"}, headers=KEY)
+        on_stop.assert_awaited_once()
+        assert not server.entertainment_active
+
+    async def test_unknown_configuration(self, clip):
+        client, _ = clip
+        resp = await client.put(
+            "/clip/v2/resource/entertainment_configuration/nope",
+            json={"action": "start"},
+            headers=KEY,
+        )
+        assert resp.status == 404
+
+    async def test_invalid_json(self, clip):
+        client, _ = clip
+        resp = await client.put(CONFIG_PATH, data=b"{nope", headers=KEY)
+        assert resp.status == 400
+
+    async def test_unauthorized(self, clip):
+        client, server = clip
+        resp = await client.put(CONFIG_PATH, json={"action": "start"})
+        assert resp.status == 403 and not server.entertainment_active
+
+    async def test_other_fields_accepted_and_logged(self, clip, caplog):
+        client, server = clip
+        with caplog.at_level(logging.INFO):
+            resp = await client.put(CONFIG_PATH, json={"metadata": {"name": "x"}}, headers=KEY)
+        assert resp.status == 200 and not server.entertainment_active
+        assert any("configuration update ignored" in r.getMessage() for r in caplog.records)
+
+    async def test_unsupported_mutation_is_405_and_logged(self, clip, caplog):
+        client, _ = clip
+        with caplog.at_level(logging.INFO):
+            resp = await client.post(
+                "/clip/v2/resource/entertainment_configuration",
+                json={"metadata": {"name": "Living room"}},
+                headers=KEY,
+            )
+        assert resp.status == 405
+        assert (await resp.json())["errors"] == [{"description": "method not allowed"}]
+        assert any("Living room" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+class TestEventStream:
+    async def test_unauthorized(self, clip):
+        client, _ = clip
+        assert (await client.get("/eventstream/clip/v2")).status == 403
+
+    async def test_greets_then_reports_start_and_stop(self, clip):
+        client, server = clip
+        resp = await client.get("/eventstream/clip/v2", headers=KEY)
+        assert resp.status == 200
+        assert resp.headers["Content-Type"].startswith("text/event-stream")
+        assert await resp.content.readline() == b": hi\n"
+
+        await client.put(CONFIG_PATH, json={"action": "start"}, headers=KEY)
+        event = await _read_event(resp)
+        assert event["type"] == "update"
+        assert event["data"] == [
+            {
+                "id": CONFIG_ID,
+                "id_v1": "/groups/1",
+                "type": "entertainment_configuration",
+                "status": "active",
+                "active_streamer": {"rid": USER, "rtype": "auth_v1"},
+            }
+        ]
+
+        await client.put(CONFIG_PATH, json={"action": "stop"}, headers=KEY)
+        assert (await _read_event(resp))["data"][0]["status"] == "inactive"
+        resp.close()
+
+    async def test_watchdog_teardown_reports_inactive(self, clip):
+        """clear_entertainment (watchdog / release) must reach the stream too."""
+        client, server = clip
+        await server._set_entertainment_active(True, USER)
+        resp = await client.get("/eventstream/clip/v2", headers=KEY)
+        await resp.content.readline()
+        server.clear_entertainment()
+        assert (await _read_event(resp))["data"][0]["status"] == "inactive"
+        resp.close()
+
+    async def test_v1_stream_start_also_reported(self, clip):
+        client, server = clip
+        resp = await client.get("/eventstream/clip/v2", headers=KEY)
+        await resp.content.readline()
+        await client.put(f"/api/{USER}/groups/1", json={"stream": {"active": True}})
+        assert (await _read_event(resp))["data"][0]["status"] == "active"
+        resp.close()
+
+    async def test_keepalive(self, clip):
+        client, _ = clip
+        with patch.object(hue_api, "EVENTSTREAM_KEEPALIVE", 0.05):
+            resp = await client.get("/eventstream/clip/v2", headers=KEY)
+            assert await resp.content.readline() == b": hi\n"
+            await resp.content.readline()  # blank line
+            assert await asyncio.wait_for(resp.content.readline(), 1) == b": hi\n"
+        resp.close()
+
+    async def test_server_stop_ends_streams(self, clip):
+        client, server = clip
+        resp = await client.get("/eventstream/clip/v2", headers=KEY)
+        await resp.content.readline()
+        await server.async_stop()
+        rest = await asyncio.wait_for(resp.content.read(), 2)
+        assert b"data:" not in rest
+        assert not server._event_queues

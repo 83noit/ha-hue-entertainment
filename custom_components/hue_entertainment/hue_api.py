@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
+import json
 import logging
 import secrets
 import ssl
@@ -25,6 +27,8 @@ from .const import (
 from .user_store import UserStore
 
 _LOGGER = logging.getLogger(__name__)
+
+EVENTSTREAM_KEEPALIVE = 10.0  # seconds between keepalive comments on /eventstream
 
 
 _PROXY_HEADERS = (
@@ -142,6 +146,8 @@ class HueAPIServer:
         self._https_port = https_port
         self._https_runner: web.AppRunner | None = None
         self._clip_logged_paths: set[str] = set()
+        # One queue per open /eventstream/clip/v2 connection; None ends it
+        self._event_queues: set[asyncio.Queue[dict | None]] = set()
 
     def set_entertainment_callbacks(
         self,
@@ -168,8 +174,11 @@ class HueAPIServer:
 
     def clear_entertainment(self) -> None:
         """Reset entertainment state (e.g. from watchdog timeout)."""
+        was_active = self._entertainment_active
         self._entertainment_active = False
         self._entertainment_owner = None
+        if was_active:
+            self._publish_configuration_update()
 
     @property
     def _link_button_active(self) -> bool:
@@ -237,6 +246,8 @@ class HueAPIServer:
 
     async def async_stop(self) -> None:
         """Stop serving."""
+        for queue in self._event_queues:
+            queue.put_nowait(None)  # end open event streams so cleanup doesn't wait on them
         if self._http_host is not None:
             self._http_host.detach(self)
         if self._http_runner:
@@ -282,6 +293,10 @@ class HueAPIServer:
         ("GET", "/clip/v2/resource", "_handle_clip_all"),
         ("GET", "/clip/v2/resource/{rtype}", "_handle_clip_rtype"),
         ("GET", "/clip/v2/resource/{rtype}/{rid}", "_handle_clip_by_id"),
+        ("PUT", "/clip/v2/resource/entertainment_configuration/{rid}", "_handle_clip_ent_put"),
+        ("GET", "/eventstream/clip/v2", "_handle_eventstream"),
+        # Anything else under /clip/v2 (creating/editing resources): 405, logged
+        ("*", "/clip/v2/{tail:.*}", "_handle_clip_unsupported"),
     )
 
     def _register_routes(self, app: web.Application, clip: bool = False) -> None:
@@ -505,12 +520,14 @@ class HueAPIServer:
             self._entertainment_active = True
             self._entertainment_owner = username
             _LOGGER.info("Entertainment streaming started by %s", short_id(username))
+            self._publish_configuration_update()
             if self._on_entertainment_start:
                 await self._on_entertainment_start(username)
         else:
             self._entertainment_active = False
             self._entertainment_owner = None
             _LOGGER.info("Entertainment streaming stopped")
+            self._publish_configuration_update()
             if self._on_entertainment_stop:
                 await self._on_entertainment_stop()
 
@@ -892,3 +909,96 @@ class HueAPIServer:
             self._clip_log_once(request, "not found")
             return self._clip_response(status=404, error="Not Found")
         return self._clip_response(data)
+
+    async def _handle_clip_ent_put(self, request: web.Request) -> web.Response:
+        """PUT …/entertainment_configuration/{id} — ``{"action": "start"|"stop"}``."""
+        username = self._clip_application_key(request)
+        if username is None:
+            return self._clip_response(status=403, error="unauthorized user")
+        config_id = clip_v2.entertainment_configuration_id(self._bridge_id)
+        if request.match_info["rid"] != config_id or not self._light_entities:
+            return self._clip_response(status=404, error="Not Found")
+        body = await self._safe_json(request)
+        if not isinstance(body, dict):
+            return self._clip_response(status=400, error="body contains invalid json")
+        action = body.get("action")
+        if action == "start":
+            await self._set_entertainment_active(True, username)
+        elif action == "stop":
+            await self._set_entertainment_active(False, username)
+        if set(body) - {"action"}:
+            _LOGGER.info("CLIP v2 configuration update ignored: %s", _truncate(body))
+        return self._clip_response([{"rid": config_id, "rtype": "entertainment_configuration"}])
+
+    async def _handle_clip_unsupported(self, request: web.Request) -> web.Response:
+        """Mutations we don't support (e.g. creating an entertainment area)."""
+        if self._clip_application_key(request) is None:
+            return self._clip_response(status=403, error="unauthorized user")
+        body = await request.text()
+        _LOGGER.info(
+            "CLIP v2 client request not supported: %s %s %s",
+            request.method,
+            request.path,
+            body[:500],
+        )
+        return self._clip_response(status=405, error="method not allowed")
+
+    def _publish_configuration_update(self) -> None:
+        """Send an ``update`` event for the entertainment configuration's status."""
+        if not self._event_queues or not self._light_entities:
+            return
+        data: dict[str, Any] = {
+            "id": clip_v2.entertainment_configuration_id(self._bridge_id),
+            "id_v1": "/groups/1",
+            "type": "entertainment_configuration",
+            "status": "active" if self._entertainment_active else "inactive",
+        }
+        if self._entertainment_active and self._entertainment_owner:
+            data["active_streamer"] = {"rid": self._entertainment_owner, "rtype": "auth_v1"}
+        event = {
+            "creationtime": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "data": [data],
+            "id": str(uuid.uuid4()),
+            "type": "update",
+        }
+        for queue in self._event_queues:
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                _LOGGER.debug("Event stream client not reading; event dropped")
+
+    async def _handle_eventstream(self, request: web.Request) -> web.StreamResponse:
+        """GET /eventstream/clip/v2 — server-sent events (status changes only)."""
+        if self._clip_application_key(request) is None:
+            return self._clip_response(status=403, error="unauthorized user")
+        resp = web.StreamResponse(
+            headers={
+                "Content-Type": "text/event-stream; charset=utf-8",
+                "Cache-Control": "no-cache",
+            }
+        )
+        await resp.prepare(request)
+        queue: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=32)
+        self._event_queues.add(queue)
+        try:
+            await resp.write(b": hi\n\n")
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), EVENTSTREAM_KEEPALIVE)
+                except TimeoutError:
+                    await resp.write(b": hi\n\n")
+                    continue
+                if event is None:
+                    break
+                message = f"id: {int(time.time())}:0\ndata: {json.dumps([event])}\n\n"
+                await resp.write(message.encode())
+        except ConnectionResetError:
+            pass  # client went away
+        finally:
+            self._event_queues.discard(queue)
+        return resp
+
+
+def _truncate(body: dict) -> str:
+    text = json.dumps(body)
+    return text if len(text) <= 500 else text[:500] + "…"

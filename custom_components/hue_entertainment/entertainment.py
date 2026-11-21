@@ -331,12 +331,15 @@ class EntertainmentEngine:
             self._first_frame_logged = True
             cs = "XY" if color_space == COLOR_SPACE_XY else "RGB"
             ch = ", ".join(f"ch{c.channel_id}=({c.r},{c.g},{c.b})" for c in channels)
+            # v2 frames name the entertainment configuration the client started
+            config = f" config={data[16:52].decode(errors='replace')}" if api_version == 2 else ""
             _LOGGER.info(
-                "First HueStream frame: v%d %s [%s] (%d bytes)",
+                "First HueStream frame: v%d %s [%s] (%d bytes)%s",
                 api_version,
                 cs,
                 ch,
                 len(data),
+                config,
             )
 
         self._log_fps(now)
