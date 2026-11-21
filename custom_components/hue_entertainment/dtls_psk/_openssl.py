@@ -29,6 +29,7 @@ ffi.cdef("""
     SSL_CTX *SSL_CTX_new(const SSL_METHOD *method);
     void SSL_CTX_free(SSL_CTX *ctx);
     long SSL_CTX_set_options(SSL_CTX *ctx, long options);
+    int SSL_CTX_set_cipher_list(SSL_CTX *ctx, const char *str);
 
     /* PSK server callback type */
     typedef unsigned int (*psk_server_cb_t)(

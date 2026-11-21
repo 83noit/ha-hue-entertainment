@@ -173,3 +173,178 @@ class TestDTLSPSKServer:
 
         finally:
             await server.async_stop()
+
+
+# ---------------------------------------------------------------------------
+# Session control: abort_session, session-end reasons, cipher pinning
+# ---------------------------------------------------------------------------
+
+_FRAME = b"HueStream" + b"\x02\x00" + b"\x00" * 41 + b"\x00\xff\xff\x00\x00\x00\x00"
+
+
+def _client(port: int, quiet: bool = True) -> subprocess.Popen:
+    args = [
+        "openssl",
+        "s_client",
+        "-dtls",
+        "-psk",
+        TEST_PSK_KEY.hex(),
+        "-psk_identity",
+        TEST_PSK_IDENTITY,
+        "-connect",
+        f"127.0.0.1:{port}",
+    ]
+    if quiet:
+        args.append("-quiet")
+    return subprocess.Popen(
+        args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+
+
+async def _send_until(proc: subprocess.Popen, event: asyncio.Event, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not event.is_set() and time.monotonic() < deadline:
+        proc.stdin.write(_FRAME)
+        proc.stdin.flush()
+        await asyncio.sleep(0.05)
+    assert event.is_set(), "no frame reached the server"
+
+
+class TestSessionControl:
+    @pytest.fixture
+    async def server(self):
+        frames: list[bytes] = []
+        ends: list[str] = []
+        got_frame, ended = asyncio.Event(), asyncio.Event()
+
+        def on_frame(data: bytes) -> None:
+            frames.append(data)
+            got_frame.set()
+
+        def on_end(reason: str) -> None:
+            ends.append(reason)
+            ended.set()
+
+        port = free_udp_port()
+        server = DTLSPSKServer(
+            host="127.0.0.1",
+            port=port,
+            psk_callback=psk_callback,
+            frame_callback=on_frame,
+            read_timeout=1.0,
+            poll_interval=0.1,
+            session_end_callback=on_end,
+        )
+        await server.async_start()
+        try:
+            yield server, port, got_frame, ended, ends
+        finally:
+            await server.async_stop()
+
+    @pytest.mark.asyncio
+    async def test_abort_ends_session_and_frees_server(self, server):
+        server, port, got_frame, ended, ends = server
+        first = _client(port)
+        try:
+            await _send_until(first, got_frame)
+            assert server.in_session
+            server.abort_session()
+            await asyncio.wait_for(ended.wait(), 3)
+            assert ends == ["aborted"] and not server.in_session
+        finally:
+            first.terminate()
+            first.wait(timeout=5)
+
+        # A second client gets in straight away
+        got_frame.clear()
+        second = _client(port)
+        try:
+            await _send_until(second, got_frame)
+            assert server.in_session
+        finally:
+            second.terminate()
+            second.wait(timeout=5)
+
+    @pytest.mark.asyncio
+    async def test_abort_between_sessions_is_a_no_op(self, server):
+        server, port, got_frame, ended, ends = server
+        server.abort_session()  # nothing to end
+        proc = _client(port)
+        try:
+            await _send_until(proc, got_frame)
+            await asyncio.sleep(0.4)  # several polls: the stale abort must not apply
+            assert server.in_session and ends == []
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+
+    @pytest.mark.asyncio
+    async def test_idle_session_reports_idle(self, server):
+        server, port, got_frame, ended, ends = server
+        proc = _client(port)
+        try:
+            await _send_until(proc, got_frame)
+            await asyncio.wait_for(ended.wait(), 4)  # read_timeout=1 s
+            assert ends == ["idle"]
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+
+    @pytest.mark.asyncio
+    async def test_clean_close_reports_closed(self, server):
+        server, port, got_frame, ended, ends = server
+        proc = _client(port, quiet=False)  # without -quiet, EOF on stdin sends close_notify
+        try:
+            await _send_until(proc, got_frame)
+            proc.stdin.close()
+            await asyncio.wait_for(ended.wait(), 4)
+            assert ends == ["closed"]
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+
+    @pytest.mark.asyncio
+    async def test_cipher_pinned(self):
+        """A client offering only another PSK suite can't complete the handshake."""
+        frames: list[bytes] = []
+        port = free_udp_port()
+        server = DTLSPSKServer(
+            host="127.0.0.1",
+            port=port,
+            psk_callback=psk_callback,
+            frame_callback=frames.append,
+            read_timeout=1.0,
+            poll_interval=0.1,
+        )
+        await server.async_start()
+        try:
+            proc = subprocess.Popen(
+                [
+                    "openssl",
+                    "s_client",
+                    "-dtls1_2",
+                    "-cipher",
+                    "PSK-AES256-CBC-SHA",
+                    "-psk",
+                    TEST_PSK_KEY.hex(),
+                    "-psk_identity",
+                    TEST_PSK_IDENTITY,
+                    "-connect",
+                    f"127.0.0.1:{port}",
+                    "-quiet",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            for _ in range(10):
+                if proc.poll() is not None:
+                    break
+                proc.stdin.write(_FRAME)
+                proc.stdin.flush()
+                await asyncio.sleep(0.1)
+            proc.terminate()
+            proc.wait(timeout=5)
+            assert frames == []
+        finally:
+            await server.async_stop()

@@ -67,8 +67,10 @@ class DTLSPSKServer:
         psk_callback: Callable[[str], bytes | None],
         frame_callback: Callable[[bytes], Any],
         loop: asyncio.AbstractEventLoop | None = None,
-        read_timeout: float = 30.0,
+        read_timeout: float = 10.0,
         poll_interval: float = 1.0,
+        cipher_list: str = "PSK-AES128-GCM-SHA256",
+        session_end_callback: Callable[[str], Any] | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -80,6 +82,15 @@ class DTLSPSKServer:
         # _running, so async_stop() returns promptly instead of waiting for
         # read_timeout.
         self._poll_interval = poll_interval
+        self._cipher_list = cipher_list
+        # Called (on the loop) with the reason a streaming session ended:
+        # "closed" (client close_notify), "idle", "aborted", "error".
+        self._session_end_callback = session_end_callback
+        # abort_session(): ends the current session at the next poll, so a
+        # stop / takeover on the REST side frees the server for a new client
+        # instead of leaving it in the old read loop until read_timeout.
+        self._abort = threading.Event()
+        self._in_session = False
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -104,6 +115,20 @@ class DTLSPSKServer:
         )
         self._thread.start()
         _LOGGER.info("DTLS-PSK server started on %s:%d", self._host, self._port)
+
+    def abort_session(self) -> None:
+        """End the current streaming session, if any (thread-safe).
+
+        Takes effect within ``poll_interval``. A no-op between sessions, so
+        it can never cut short the next client's session.
+        """
+        if self._in_session:
+            self._abort.set()
+
+    @property
+    def in_session(self) -> bool:
+        """Whether a client is currently streaming."""
+        return self._in_session
 
     async def async_stop(self) -> None:
         """Stop the server and clean up."""
@@ -161,6 +186,10 @@ class DTLSPSKServer:
             self._psk_server_callback,
         )
         libssl.SSL_CTX_set_psk_server_callback(self._ssl_ctx, self._psk_cb_handle)
+
+        # The suite Hue bridges use; don't depend on the host OpenSSL's defaults
+        if libssl.SSL_CTX_set_cipher_list(self._ssl_ctx, self._cipher_list.encode()) != 1:
+            raise RuntimeError(f"SSL_CTX_set_cipher_list failed: {get_error_string()}")
 
         # Cookie callbacks for DTLSv1_listen
         libssl.SSL_CTX_set_cookie_generate_cb(self._ssl_ctx, _cookie_generate)
@@ -261,17 +290,33 @@ class DTLSPSKServer:
             )
 
         _LOGGER.info("DTLS handshake complete, streaming active")
+        self._abort.clear()  # an abort aimed at a previous session doesn't apply
+        self._in_session = True
+        try:
+            reason = self._read_frames(ssl)
+        finally:
+            self._in_session = False
+        _LOGGER.info("DTLS streaming session ended (%s)", reason)
+        if self._running and self._session_end_callback is not None:
+            if self._loop:
+                self._loop.call_soon_threadsafe(self._session_end_callback, reason)
+            else:
+                self._session_end_callback(reason)
 
-        # Read loop
+    def _read_frames(self, ssl) -> str:
+        """Read frames until the session ends; return why it ended."""
         buf = ffi.new(f"unsigned char[{_READ_BUF_SIZE}]")
         last_frame = time.monotonic()
         while self._running:
+            if self._abort.is_set():
+                _LOGGER.info("DTLS session ended by the bridge")
+                return "aborted"
             ret = libssl.SSL_read(ssl, buf, _READ_BUF_SIZE)
             if ret <= 0:
                 err = libssl.SSL_get_error(ssl, ret)
                 if err == SSL_ERROR_ZERO_RETURN:
                     _LOGGER.info("DTLS client disconnected cleanly")
-                    break
+                    return "closed"
                 if not self._running:
                     break
                 if err == SSL_ERROR_WANT_READ:
@@ -279,20 +324,19 @@ class DTLSPSKServer:
                     if time.monotonic() - last_frame < self._read_timeout:
                         continue
                     _LOGGER.info("No DTLS data for %.0fs, ending session", self._read_timeout)
-                    break
+                    return "idle"
                 _LOGGER.warning(
                     "SSL_read error (ret=%d, err=%d): %s",
                     ret,
                     err,
                     get_error_string(),
                 )
-                break
+                return "error"
 
             last_frame = time.monotonic()
             frame = bytes(ffi.buffer(buf, ret))
             self._dispatch_frame(frame)
-
-        _LOGGER.info("DTLS streaming session ended")
+        return "stopped"
 
     def _dispatch_frame(self, frame: bytes) -> None:
         """Send a decrypted frame to the callback."""
