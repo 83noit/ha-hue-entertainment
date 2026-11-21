@@ -325,16 +325,17 @@ class HueAPIServer:
     def _register_routes(self, app: web.Application, clip: bool = False) -> None:
         """Register the v1 routes (and CLIP v2 ones on HTTPS) on a standalone app.
 
-        On HTTPS every v1 path is also served with a trailing slash: Hue Sync
-        for macOS sends ``POST /api/`` and ``GET /api/config/``. Kept off plain
+        On HTTPS every path is also served with a trailing slash: Hue Sync for
+        macOS sends ``POST /api/`` and ``GET /api/config/``, Hue Essentials
+        ``GET /eventstream/clip/v2/``. Kept off plain
         HTTP, whose table is shared with Home Assistant's server, where
         ``/api/`` is Home Assistant's own.
         """
         for method, path, attr in self.ROUTES + (self.CLIP_ROUTES if clip else ()):
             app.router.add_route(method, path, getattr(self, attr))
         if clip:
-            for method, path, attr in self.ROUTES:
-                if not path.endswith("/"):
+            for method, path, attr in self.ROUTES + self.CLIP_ROUTES:
+                if not path.endswith("/") and "{tail" not in path:
                     app.router.add_route(method, f"{path}/", getattr(self, attr))
 
     async def handle(self, attr: str, request: web.Request) -> web.Response:

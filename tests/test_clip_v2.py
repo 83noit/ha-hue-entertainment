@@ -277,6 +277,14 @@ class TestRoutes:
         resp = await client.get(f"/api/{USER}/lights/")
         assert resp.status == 200 and len(await resp.json()) == 3
 
+    async def test_clip_paths_accept_trailing_slash(self, clip):
+        """Hue Essentials opens GET /eventstream/clip/v2/ (observed 2026-11-21)."""
+        client, _ = clip
+        assert (await client.get("/clip/v2/resource/", headers=KEY)).status == 200
+        resp = await client.get("/eventstream/clip/v2/", headers=KEY)
+        assert resp.status == 200 and await resp.content.readline() == b": hi\n"
+        resp.close()
+
     async def test_plain_http_keeps_strict_paths(self, plain):
         assert (await plain.post("/api/", json={"devicetype": "x"})).status == 404
 
