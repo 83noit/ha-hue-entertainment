@@ -13,7 +13,6 @@ server).  With nothing attached they answer 503.
 from __future__ import annotations
 
 import logging
-from ipaddress import ip_address
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
@@ -21,7 +20,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.http import KEY_AUTHENTICATED, HomeAssistantView
 
 from .const import DOMAIN, HTTP_MODE_HOMEASSISTANT, HTTP_MODE_STANDALONE
-from .hue_api import HueAPIServer
+from .hue_api import HueAPIServer, is_lan_request
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -37,31 +36,6 @@ _HA_OWNED = {("GET", "/api/config")}
 
 # Usernames issued by HueAPIServer are uuid4().hex — 32 lowercase hex chars.
 USERNAME_PATTERN = "[0-9a-f]{32}"
-_PROXY_HEADERS = (
-    "X-Forwarded-For",
-    "X-Forwarded-Host",
-    "X-Forwarded-Proto",
-    "X-Real-IP",
-    "Forwarded",
-)
-
-
-def is_lan_request(request: web.Request) -> bool:
-    """True for a direct (unproxied) request from a non-globally-routable address."""
-    if any(h in request.headers for h in _PROXY_HEADERS):
-        # Forwarded by some proxy.  If HA trusts it, request.remote already
-        # holds the real client; if it doesn't, remote is the proxy's LAN
-        # address and we can't tell where the request came from.  Hue clients
-        # never speak through a proxy, so refuse either way.
-        return False
-    remote = request.remote
-    if not remote:
-        return False
-    try:
-        addr = ip_address(remote)
-    except ValueError:
-        return False
-    return not addr.is_global
 
 
 @callback

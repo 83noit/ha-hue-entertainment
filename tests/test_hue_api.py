@@ -772,3 +772,50 @@ class TestLightCommandCallback:
         resp = await client.put("/api/someuser/lights/2/state", json={"xy": [0.1, 0.2]})
         assert resp.status == 200
         assert received == [(2, {"xy": [0.1, 0.2]})]
+
+
+# ---------------------------------------------------------------------------
+# Standalone server: LAN-only
+# ---------------------------------------------------------------------------
+
+
+class TestStandaloneLanOnly:
+    """The standalone server refuses proxied / non-LAN requests (a forwarded port)."""
+
+    @pytest.mark.asyncio
+    async def test_direct_lan_request_served_proxied_refused(self):
+        import socket  # noqa: PLC0415
+
+        import aiohttp  # noqa: PLC0415
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        server = HueAPIServer(
+            bridge_id=_BRIDGE_ID,
+            mac=_MAC,
+            host_ip=_HOST_IP,
+            http_port=port,
+            channel_count=1,
+            light_entities=["light.only"],
+            bind_ip="127.0.0.1",
+        )
+        await server.async_start()
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"http://127.0.0.1:{port}/api/config"
+                async with session.get(url) as resp:
+                    assert resp.status == 200
+                async with session.get(url, headers={"X-Forwarded-For": "203.0.113.9"}) as resp:
+                    assert resp.status == 404
+        finally:
+            await server.async_stop()
+
+    @pytest.mark.parametrize(
+        ("remote", "lan"),
+        [("192.168.1.20", True), ("10.0.0.5", True), ("127.0.0.1", True), ("1.1.1.1", False)],
+    )
+    def test_is_lan_request(self, remote, lan):
+        from unittest.mock import Mock  # noqa: PLC0415
+
+        assert _hue_api.is_lan_request(Mock(remote=remote, headers={})) is lan

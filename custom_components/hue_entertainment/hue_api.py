@@ -8,6 +8,7 @@ import secrets
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from ipaddress import ip_address
 from typing import Any
 
 from aiohttp import web
@@ -21,6 +22,49 @@ from .const import (
 from .user_store import UserStore
 
 _LOGGER = logging.getLogger(__name__)
+
+
+_PROXY_HEADERS = (
+    "X-Forwarded-For",
+    "X-Forwarded-Host",
+    "X-Forwarded-Proto",
+    "X-Real-IP",
+    "Forwarded",
+)
+
+
+def is_lan_request(request: web.Request) -> bool:
+    """True for a direct (unproxied) request from a non-globally-routable address."""
+    if any(h in request.headers for h in _PROXY_HEADERS):
+        # Forwarded by some proxy.  If HA trusts it, request.remote already
+        # holds the real client; if it doesn't, remote is the proxy's LAN
+        # address and we can't tell where the request came from.  Hue clients
+        # never speak through a proxy, so refuse either way.
+        return False
+    remote = request.remote
+    if not remote:
+        return False
+    try:
+        addr = ip_address(remote)
+    except ValueError:
+        return False
+    return not addr.is_global
+
+
+@web.middleware
+async def _lan_only(
+    request: web.Request,
+    handler: Callable[[web.Request], Awaitable[web.StreamResponse]],
+) -> web.StreamResponse:
+    """Refuse anything that isn't a direct request from the local network.
+
+    Hue clients live on the LAN. A port forwarded from the internet (or a
+    reverse proxy) would otherwise expose pairing and the lights to anyone.
+    """
+    if not is_lan_request(request):
+        _LOGGER.debug("Refused non-LAN request from %s: %s", request.remote, request.path)
+        raise web.HTTPNotFound
+    return await handler(request)
 
 
 @web.middleware
@@ -137,7 +181,7 @@ class HueAPIServer:
             self._http_host.attach(self)
             _LOGGER.info("Hue API served by Home Assistant's HTTP server on :%d", self._http_port)
             return
-        app = web.Application(middlewares=[_request_logger])
+        app = web.Application(middlewares=[_lan_only, _request_logger])
         self._register_routes(app)
 
         self._http_runner = web.AppRunner(app)
