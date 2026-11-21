@@ -161,13 +161,13 @@ class DTLSPSKServer:
             identity_str = ffi.string(identity).decode()
             key = self._psk_callback(identity_str)
             if key is None:
-                _LOGGER.warning("PSK lookup failed for identity: %s", identity_str)
+                _LOGGER.warning("PSK lookup failed for identity: %s…", identity_str[:6])
                 return 0
             if len(key) > max_psk_len:
                 _LOGGER.error("PSK too long (%d > %d)", len(key), max_psk_len)
                 return 0
             ffi.memmove(psk, key, len(key))
-            _LOGGER.debug("PSK provided for identity: %s", identity_str)
+            _LOGGER.debug("PSK provided for identity: %s…", identity_str[:6])
             return len(key)
         except Exception:
             _LOGGER.exception("Error in PSK callback")

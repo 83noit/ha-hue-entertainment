@@ -469,10 +469,36 @@ class TestV1Catchalls:
         assert resp.status == 200
 
     @pytest.mark.asyncio
-    async def test_unknown_delete_returns_success(self, api):
+    async def test_delete_reports_nothing_deleted(self, api):
+        """Nothing can be deleted: a Hue error, not a fake success."""
         client, _ = api
         resp = await client.delete("/api/someuser/rules/1")
         assert resp.status == 200
+        error = (await resp.json())[0]["error"]
+        assert error["type"] == 3 and "not available" in error["description"]
+
+    @pytest.mark.asyncio
+    async def test_pairing_rejects_non_object_body(self, api):
+        """An array body used to raise (500); now a Hue 'invalid json' error."""
+        client, _ = api
+        resp = await client.post("/api", json=[{"devicetype": "x"}])
+        assert resp.status == 200
+        assert (await resp.json())[0]["error"]["type"] == 2
+
+    @pytest.mark.asyncio
+    async def test_request_log_masks_username(self, api, caplog):
+        import logging  # noqa: PLC0415
+
+        client, server = api
+        server_logger = "hue_entertainment.hue_api"
+        app = web.Application(middlewares=[_hue_api._request_logger])
+        server._register_routes(app)
+        async with TestClient(TestServer(app)) as logged:
+            with caplog.at_level(logging.DEBUG, logger=server_logger):
+                await logged.get(f"/api/{_PRE_PAIRED_USER}/lights")
+        lines = [r.getMessage() for r in caplog.records if r.name == server_logger]
+        assert any("/api/someus…/lights" in line for line in lines)
+        assert not any(_PRE_PAIRED_USER + "/" in line for line in lines)
 
 
 # ---------------------------------------------------------------------------
@@ -534,11 +560,12 @@ class TestZeroLightsEdgeCase:
 
 class TestAuthRequired:
     @pytest.mark.asyncio
-    async def test_config_auth_rejects_unknown_user(self, api):
+    async def test_config_for_unknown_user_is_the_public_config(self, api):
+        """Like a real bridge: no error, the short public config, no whitelist."""
         client, _ = api
         resp = await client.get("/api/baduser/config")
         data = await resp.json()
-        assert data[0]["error"]["type"] == 1
+        assert data["bridgeid"] == _BRIDGE_ID and "whitelist" not in data
 
     @pytest.mark.asyncio
     async def test_capabilities_rejects_unknown_user(self, api):

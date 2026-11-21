@@ -74,8 +74,18 @@ async def _request_logger(
 ) -> web.StreamResponse:
     """Log every request at DEBUG — shows exactly which endpoints the TV hits."""
     resp = await handler(request)
-    _LOGGER.debug("%s %s -> %d", request.method, request.path, resp.status)
+    _LOGGER.debug("%s %s -> %d", request.method, _log_path(request), resp.status)
     return resp
+
+
+def short_id(username: str | None) -> str:
+    """A username is the client's credential: log only its first characters."""
+    return "-" if not username else f"{username[:6]}…"
+
+
+def _log_path(request: web.Request) -> str:
+    username = request.match_info.get("username")
+    return request.path.replace(username, short_id(username)) if username else request.path
 
 
 class HueAPIServer:
@@ -238,7 +248,7 @@ class HueAPIServer:
         """Dispatch a request to a handler by attribute name (used by ha_http views)."""
         handler: Callable[[web.Request], Awaitable[web.Response]] = getattr(self, attr)
         resp = await handler(request)
-        _LOGGER.debug("%s %s -> %d", request.method, request.path, resp.status)
+        _LOGGER.debug("%s %s -> %d", request.method, _log_path(request), resp.status)
         return resp
 
     # ---------------------------------------------------------------------------
@@ -421,18 +431,19 @@ class HueAPIServer:
 
     @staticmethod
     async def _safe_json(request: web.Request) -> dict | None:
-        """Parse JSON body, returning None on malformed input."""
+        """Parse a JSON object body, returning None on malformed input or a non-object."""
         try:
-            return await request.json()
+            body = await request.json()
         except (ValueError, UnicodeDecodeError):
             return None
+        return body if isinstance(body, dict) else None
 
     async def _set_entertainment_active(self, active: bool, username: str = "") -> None:
         """Toggle entertainment streaming state and fire callbacks."""
         if active:
             self._entertainment_active = True
             self._entertainment_owner = username
-            _LOGGER.info("Entertainment streaming started by %s", username)
+            _LOGGER.info("Entertainment streaming started by %s", short_id(username))
             if self._on_entertainment_start:
                 await self._on_entertainment_start(username)
         else:
@@ -471,9 +482,14 @@ class HueAPIServer:
         return web.json_response(config)
 
     async def _handle_config_auth(self, request: web.Request) -> web.Response:
-        """GET /api/{username}/config — authenticated config."""
+        """GET /api/{username}/config — full config, or the public one for an unknown user.
+
+        A real bridge answers an unknown username here with the same short
+        public config as /api/config, not an error; clients use it to check a
+        bridge before (re-)pairing.
+        """
         if self._check_username(request) is None:
-            return self._unauthorized_response()
+            return await self._handle_config(request)
         return web.json_response(self._build_v1_config())
 
     async def _handle_capabilities(self, request: web.Request) -> web.Response:
@@ -537,7 +553,7 @@ class HueAPIServer:
             clientkey = secrets.token_hex(16)
             self._user_store.add(username, clientkey, device_type)
             await self._user_store.async_save()
-            _LOGGER.info("Paired new client: %s (%s)", device_type, username)
+            _LOGGER.info("Paired new client: %s (%s)", device_type, short_id(username))
 
         result = {"success": {"username": username}}
         if generate_clientkey:
@@ -731,4 +747,17 @@ class HueAPIServer:
             return self._unauthorized_response()
         resource = request.match_info.get("resource", "")
         rid = request.match_info.get("id", "")
-        return web.json_response([{"success": f"/{resource}/{rid} deleted"}])
+        # Nothing here can be deleted: say so rather than report a deletion
+        # that didn't happen (e.g. a client trying to unpair another one).
+        address = f"/{resource}/{rid}"
+        return web.json_response(
+            [
+                {
+                    "error": {
+                        "type": 3,
+                        "address": address,
+                        "description": f"resource, {address}, not available",
+                    }
+                }
+            ]
+        )

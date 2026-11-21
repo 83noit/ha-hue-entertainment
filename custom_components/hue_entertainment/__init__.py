@@ -318,7 +318,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
 
     async def _on_entertainment_start(username: str) -> None:
         nonlocal watchdog_task, session_owner
-        _LOGGER.info("Entertainment started by %s…", username[:8])
+        _LOGGER.info("Entertainment started by %s…", username[:6])
         if engine.is_active and session_owner not in (None, username):
             # Another client takes over: drop the previous client's stream so
             # the newcomer's DTLS handshake isn't stuck behind it.
