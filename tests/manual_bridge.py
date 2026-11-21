@@ -12,7 +12,8 @@ Usage (inside `nix develop`, from the repo root):
 
 Keys while running: `p` + Enter opens the 60 s pairing window (it also opens
 at start), `q` + Enter quits. State (bridge id, paired clients, certificate)
-lives in ~/.cache/hue-manual-bridge so clients stay paired across runs.
+lives in ~/.cache/hue-manual-bridge so clients stay paired across runs; the
+log is also appended to bridge.log there.
 Not collected by pytest.
 """
 
@@ -91,8 +92,9 @@ def bridge_id(data_dir: Path) -> str:
 
 
 def log_tls_alerts(ctx: ssl.SSLContext) -> None:
-    """Log TLS alerts a client sends — e.g. unknown_ca / bad_certificate when it
-    rejects the bridge certificate (CPython debug hook; skipped if unavailable)."""
+    """Log the TLS alerts a client sends — e.g. unknown_ca / bad_certificate when
+    it rejects the bridge certificate. (CPython debug hook; skipped if
+    unavailable. Handshake start/success/failure come from asyncio's debug log.)"""
 
     def on_message(conn, direction, version, content_type, msg_type, data):
         if direction != "read" or content_type != ssl._TLSContentType.ALERT:  # type: ignore[attr-defined]
@@ -168,11 +170,15 @@ async def main() -> None:
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
+    args.data_dir.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s: %(message)s",
+        handlers=[logging.StreamHandler(), logging.FileHandler(args.data_dir / "bridge.log")],
+    )
     logging.getLogger("hue_entertainment").setLevel(logging.DEBUG)  # every request
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)  # duplicate of the above
 
-    args.data_dir.mkdir(parents=True, exist_ok=True)
     ip = args.ip or lan_ip()
     bid = bridge_id(args.data_dir)
     lights = [f"light.fake_{i + 1}" for i in range(args.lights)]
@@ -250,6 +256,13 @@ async def main() -> None:
         len(known),
         int(const.LINK_BUTTON_TIMEOUT),
     )
+
+    # asyncio only reports failed TLS handshakes in debug mode; keep just those
+    loop.set_debug(True)
+    loop.slow_callback_duration = 3600
+    asyncio_log = logging.getLogger("asyncio")
+    asyncio_log.setLevel(logging.DEBUG)
+    asyncio_log.addFilter(lambda r: "SSL" in r.getMessage() or "ssl" in r.getMessage())
 
     tasks = [asyncio.create_task(printer.run()), asyncio.create_task(watch_pairings())]
     try:
