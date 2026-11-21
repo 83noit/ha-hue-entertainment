@@ -67,9 +67,22 @@ async def _wait_for_new_user(
     return False
 
 
+def new_bridge_id() -> str:
+    """A random EUI-64 bridge id (MAC with FFFE inserted), e.g. ``3A1B2CFFFE4D5E6F``.
+
+    The first octet's multicast bit is cleared: a MAC with it set isn't a
+    valid unicast address, and strict clients may reject the bridge.
+    """
+    raw = bytearray(uuid.uuid4().bytes[:6])
+    raw[0] &= 0xFE
+    mac = raw.hex().upper()
+    return mac[:6] + "FFFE" + mac[6:]
+
+
 def mac_from_bridge_id(bridge_id: str) -> str:
     """Derive a colon-separated MAC from a 16-char Hue bridge ID."""
-    hex12 = bridge_id.replace("FFFE", "")[:12].lower()
+    # Positional, not replace("FFFE", ""): the MAC itself may contain FFFE
+    hex12 = (bridge_id[:6] + bridge_id[10:16]).lower()
     return ":".join(hex12[i : i + 2] for i in range(0, 12, 2))
 
 
@@ -112,8 +125,7 @@ class HueEntertainmentConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # t
             await self.async_set_unique_id(DOMAIN)
             self._abort_if_unique_id_configured()
             self._lights = user_input[CONF_LIGHTS]
-            raw = uuid.uuid4().hex[:12].upper()
-            self._bridge_id = raw[:6] + "FFFE" + raw[6:]
+            self._bridge_id = new_bridge_id()
             return await self.async_step_pre_pairing()
 
         return self.async_show_form(

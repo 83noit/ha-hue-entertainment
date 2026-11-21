@@ -629,3 +629,26 @@ async def test_services_raise_when_no_bridge_is_loaded(hass: HomeAssistant) -> N
     assert hass.services.has_service(DOMAIN, "pause")  # registered for HA's lifetime
     with pytest.raises(ServiceValidationError):
         await hass.services.async_call(DOMAIN, "release", {}, blocking=True)
+
+
+def test_new_bridge_ids_are_unicast_eui64():
+    from custom_components.hue_entertainment.config_flow import (  # noqa: PLC0415
+        mac_from_bridge_id,
+        new_bridge_id,
+    )
+
+    for _ in range(200):
+        bridge_id = new_bridge_id()
+        assert len(bridge_id) == 16 and bridge_id[6:10] == "FFFE"
+        assert bridge_id == bridge_id.upper()
+        assert int(bridge_id[:2], 16) & 0x01 == 0  # not a multicast MAC
+        assert len(mac_from_bridge_id(bridge_id).split(":")) == 6
+
+
+def test_mac_from_bridge_id_is_positional():
+    from custom_components.hue_entertainment.config_flow import (  # noqa: PLC0415
+        mac_from_bridge_id,
+    )
+
+    assert mac_from_bridge_id("FFFE12FFFE345678") == "ff:fe:12:34:56:78"
+    assert mac_from_bridge_id("001788FFFE0AB1C2") == "00:17:88:0a:b1:c2"
