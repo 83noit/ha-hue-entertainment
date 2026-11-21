@@ -493,7 +493,7 @@ async def test_pause_auto_expires_on_the_real_timer(hass: HomeAssistant) -> None
 
 
 async def test_release_service_forces_teardown_and_skips_restore(hass: HomeAssistant) -> None:
-    """A non-compliant TV (keeps streaming) is torn down after grace + FRAME_TIMEOUT,
+    """A non-compliant TV (keeps streaming) is torn down once the grace period is over,
     and the lights are NOT restored to their pre-session state — the caller's
     sweep is the new truth."""
     with (
@@ -518,13 +518,69 @@ async def test_release_service_forces_teardown_and_skips_restore(hass: HomeAssis
         assert not data.api_server.entertainment_active  # stream.active flag flipped
         assert data.engine.is_active  # ...but the session is still up, waiting on the TV
 
-        await asyncio.sleep(1.2)  # grace (0.3) + FRAME_TIMEOUT (0.5) + watchdog slack
+        await asyncio.sleep(1.2)  # grace (0.3) + watchdog check (0.1) + slack
         await hass.async_block_till_done()
         assert hass.states.get(status).state == "idle"
         assert not data.engine.is_active
         reproduce.assert_not_called()
 
         assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_forced_release_does_not_wait_for_frame_timeout(hass: HomeAssistant) -> None:
+    """Once the grace period is over the watchdog tears down on its next check,
+    even with the (10 s) frame timeout far away."""
+    with (
+        patch("custom_components.hue_entertainment.FRAME_TIMEOUT", 60.0),
+        patch("custom_components.hue_entertainment.FRAME_WATCHDOG_INTERVAL", 0.1),
+    ):
+        entry = await _setup(hass, _entry())
+        data = entry.runtime_data
+        await data.api_server._set_entertainment_active(True, "tvuser")
+        await hass.services.async_call(DOMAIN, "release", {"seconds": 0.2}, blocking=True)
+        await asyncio.sleep(0.6)
+        await hass.async_block_till_done()
+        assert not data.engine.is_active
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_session_end_aborts_the_dtls_session(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, _entry())
+    data = entry.runtime_data
+    with patch.object(data.dtls_server, "abort_session") as abort:
+        await data.api_server._set_entertainment_active(True, "tvuser")
+        abort.assert_not_called()
+        await data.api_server._set_entertainment_active(False)
+        abort.assert_called_once()
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_takeover_by_another_client_aborts_the_old_stream(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, _entry())
+    data = entry.runtime_data
+    with patch.object(data.dtls_server, "abort_session") as abort:
+        await data.api_server._set_entertainment_active(True, "tv")
+        await data.api_server._set_entertainment_active(True, "tv")  # same client again
+        abort.assert_not_called()
+        await data.api_server._set_entertainment_active(True, "phone")
+        abort.assert_called_once()
+        assert data.api_server.entertainment_owner == "phone"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_clean_dtls_close_ends_the_session(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, _entry())
+    data = entry.runtime_data
+    await data.api_server._set_entertainment_active(True, "tvuser")
+    # (no block_till_done while a session is up: it would wait for the watchdog)
+    data.dtls_server._session_end_callback("idle")  # left to the watchdog
+    await asyncio.sleep(0.05)
+    assert data.engine.is_active
+    data.dtls_server._session_end_callback("closed")
+    await asyncio.sleep(0.05)
+    assert not data.engine.is_active
+    assert not data.api_server.entertainment_active
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_release_resolves_when_tv_complies(hass: HomeAssistant) -> None:

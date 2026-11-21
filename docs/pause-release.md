@@ -101,11 +101,10 @@ switch off and *stay* off. Release:
    TV notices on its next check and disconnects on its own — an ordinary,
    clean teardown.
 4. **If the TV doesn't comply within `seconds`** (default/`0` → a couple of
-   seconds, capped at 30 s), forces the same teardown anyway: the bridge
-   stops feeding the *existing* dead-stream watchdog, which then fires on
-   schedule and tears the session down through the normal path. The
-   worst-case wait is bounded at `seconds` + the watchdog timeout (5 s),
-   never indefinite.
+   seconds, capped at 30 s), forces the same teardown anyway: the
+   *existing* dead-stream watchdog tears the session down through the
+   normal path on its next check. The worst-case wait is bounded at
+   `seconds` + the watchdog's check interval (2 s), never indefinite.
 
 A new session starting while a release is still pending (the TV reconnects)
 *is* the release resolving — treated as the old session ending and a fresh

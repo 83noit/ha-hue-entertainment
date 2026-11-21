@@ -363,6 +363,11 @@ class EntertainmentEngine:
         ]
 
     @property
+    def release_forcing(self) -> bool:
+        """True once a release's grace period expired without the TV complying."""
+        return self._release_forcing
+
+    @property
     def stats(self) -> dict[str, Any]:
         """Counters for diagnostics."""
         return {
@@ -636,12 +641,12 @@ class EntertainmentEngine:
         `stream.active` flag the caller flips separately (see the `release`
         service in __init__.py) — a compliant TV notices and disconnects on
         its own within it, producing a clean, ordinary teardown through
-        async_restore_lights. If it doesn't, this stops feeding
-        last_frame_time once the grace period elapses, so the *existing*
-        FRAME_TIMEOUT watchdog detects "silence" and forces the same
-        teardown — no separate forced-disconnect mechanism needed. Either
+        async_restore_lights. If it doesn't, this sets ``release_forcing``
+        (and stops feeding last_frame_time) once the grace period elapses,
+        and the *existing* frame watchdog forces the same teardown on its
+        next check — no separate forced-disconnect mechanism needed. Either
         way, this integration never leaves you waiting on the TV forever:
-        worst case is `seconds` + FRAME_TIMEOUT.
+        worst case is `seconds` + the watchdog's check interval.
 
         Without a DTLS session (classic mode, or nothing at all) there is no
         watchdog to lean on, so the grace timer resolves the release itself

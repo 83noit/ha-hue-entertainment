@@ -41,7 +41,7 @@ TARGET_FPS = 15
 
 # Entertainment lifecycle
 FRAME_WATCHDOG_INTERVAL = 2.0  # seconds between watchdog polls
-FRAME_TIMEOUT = 5.0  # seconds of silence before auto-stop
+FRAME_TIMEOUT = 10.0  # seconds of silence before auto-stop (a real bridge's value)
 RESTORE_TRANSITION = 1.5  # seconds for light transition on restore
 RESTORE_TIMEOUT = RESTORE_TRANSITION * 4  # bound on async_reproduce_state; a light that never
 # answers must not hang teardown — see EntertainmentEngine.async_restore_lights

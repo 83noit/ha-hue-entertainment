@@ -15,7 +15,7 @@ from homeassistant.components.network import async_get_source_ip
 from homeassistant.components.zeroconf import async_get_async_instance
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT_STOP, Platform
-from homeassistant.core import CoreState, Event, HomeAssistant, ServiceCall
+from homeassistant.core import CoreState, Event, HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryNotReady, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -237,12 +237,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
     # Frames are handed over through a single-slot mailbox (freshest wins) so a
     # stalled loop never accumulates a backlog of stale frames.
     mailbox = FrameMailbox(hass.loop, engine.handle_frame)
+
+    @callback
+    def _on_dtls_session_end(reason: str) -> None:
+        # A client that closes its stream cleanly is done: end the session now
+        # (as a real bridge does) instead of waiting for the frame watchdog.
+        if reason == "closed" and engine.is_active:
+            entry.async_create_background_task(
+                hass, _on_entertainment_stop(), name=f"{DOMAIN}_dtls_closed"
+            )
+
     dtls_server = DTLSPSKServer(
         host=bind_ip or "0.0.0.0",
         port=ent_port,
         psk_callback=psk_lookup,
         frame_callback=mailbox.put,
         loop=None,  # mailbox.put is thread-safe; it schedules onto hass.loop itself
+        read_timeout=FRAME_TIMEOUT,
+        session_end_callback=_on_dtls_session_end,
     )
 
     # mDNS discovery — use HA's shared zeroconf instance
@@ -255,6 +267,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
     )
 
     watchdog_task: asyncio.Task | None = None
+    session_owner: str | None = None
 
     def _cancel_watchdog() -> None:
         nonlocal watchdog_task
@@ -273,7 +286,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
         immediately, before attempting the bounded, best-effort light
         restore.
         """
+        nonlocal session_owner
+        session_owner = None
         api_server.clear_entertainment()
+        # End the DTLS session too, so the server is free for the next client
+        # right away instead of sitting in the old read loop until it idles out.
+        dtls_server.abort_session()
         await engine.async_restore_lights()
 
     async def _frame_watchdog() -> None:
@@ -281,6 +299,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
             while engine.is_active:
                 await asyncio.sleep(FRAME_WATCHDOG_INTERVAL)
                 if not engine.is_active:
+                    break
+                if engine.release_forcing:
+                    # release() grace period over and the TV didn't comply:
+                    # tear down now rather than after a full FRAME_TIMEOUT.
+                    _LOGGER.info("Release grace period over, ending the session")
+                    await _async_stop_entertainment_session()
                     break
                 elapsed = time.monotonic() - engine.last_frame_time
                 if elapsed > FRAME_TIMEOUT:
@@ -293,8 +317,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
             pass
 
     async def _on_entertainment_start(username: str) -> None:
-        nonlocal watchdog_task
-        _LOGGER.info("Entertainment started by %s", username)
+        nonlocal watchdog_task, session_owner
+        _LOGGER.info("Entertainment started by %s…", username[:8])
+        if engine.is_active and session_owner not in (None, username):
+            # Another client takes over: drop the previous client's stream so
+            # the newcomer's DTLS handshake isn't stuck behind it.
+            dtls_server.abort_session()
+        session_owner = username
         await engine.async_snapshot_lights()
         if watchdog_task is None or watchdog_task.done():
             # Owned by the entry: cancelled automatically on unload
