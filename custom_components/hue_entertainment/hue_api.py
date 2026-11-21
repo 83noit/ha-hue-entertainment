@@ -29,6 +29,7 @@ from .user_store import UserStore
 _LOGGER = logging.getLogger(__name__)
 
 EVENTSTREAM_KEEPALIVE = 10.0  # seconds between keepalive comments on /eventstream
+_CLIP_LOG_LIMIT = 100  # distinct unserved CLIP v2 requests logged at INFO
 _HTTPS_SHUTDOWN_TIMEOUT = 2.0  # seconds open event streams get to finish on stop
 
 
@@ -924,11 +925,17 @@ class HueAPIServer:
         )
 
     def _clip_log_once(self, request: web.Request, detail: str) -> None:
-        """Log what an official client asked for that we don't serve (once per path)."""
+        """Log what an official client asked for that we don't serve (once per path).
+
+        Bounded: a client can't grow the set (or the INFO log) without limit
+        by inventing paths; past the cap, repeats go to DEBUG only.
+        """
         key = f"{request.method} {request.path}"
-        if key not in self._clip_logged_paths:
-            self._clip_logged_paths.add(key)
-            _LOGGER.info("CLIP v2 client asked for %s (%s)", key, detail)
+        if key in self._clip_logged_paths or len(self._clip_logged_paths) >= _CLIP_LOG_LIMIT:
+            _LOGGER.debug("CLIP v2 client asked for %s (%s)", key, detail)
+            return
+        self._clip_logged_paths.add(key)
+        _LOGGER.info("CLIP v2 client asked for %s (%s)", key, detail)
 
     async def _handle_auth_v1(self, request: web.Request) -> web.Response:
         """GET /auth/v1 — the client's application id, a UUID like a real bridge's.
@@ -986,7 +993,7 @@ class HueAPIServer:
         elif action == "stop":
             await self._set_entertainment_active(False, username)
         if set(body) - {"action"}:
-            _LOGGER.info("CLIP v2 configuration update ignored: %s", _truncate(body))
+            self._clip_log_once(request, f"configuration update ignored: {_truncate(body)}")
         return self._clip_response([{"rid": config_id, "rtype": "entertainment_configuration"}])
 
     async def _handle_clip_unsupported(self, request: web.Request) -> web.Response:
@@ -994,12 +1001,7 @@ class HueAPIServer:
         if self._clip_application_key(request) is None:
             return self._clip_response(status=403, error="unauthorized user")
         body = await request.text()
-        _LOGGER.info(
-            "CLIP v2 client request not supported: %s %s %s",
-            request.method,
-            request.path,
-            body[:500],
-        )
+        self._clip_log_once(request, f"not supported: {body[:500]}")
         return self._clip_response(status=405, error="method not allowed")
 
     def _publish_configuration_update(self) -> None:

@@ -467,3 +467,17 @@ def test_psk_lookup_accepts_username_or_application_id():
     assert server.get_user_psk(USER) == "ab" * 16
     assert server.get_user_psk(clip_v2.application_id(USER)) == "ab" * 16
     assert server.get_user_psk(clip_v2.application_id("someone-else")) is None
+
+
+@pytest.mark.asyncio
+async def test_unserved_request_log_is_bounded(clip, caplog):
+    client, server = clip
+    with patch.object(hue_api, "_CLIP_LOG_LIMIT", 3), caplog.at_level(logging.INFO):
+        for i in range(6):
+            await client.get(f"/clip/v2/resource/made_up_{i}", headers=KEY)
+    info = [
+        r
+        for r in caplog.records
+        if r.name.endswith("hue_api") and r.levelno == logging.INFO and "made_up" in r.getMessage()
+    ]
+    assert len(info) == 3 and len(server._clip_logged_paths) == 3

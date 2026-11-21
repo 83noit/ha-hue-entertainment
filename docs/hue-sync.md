@@ -86,7 +86,7 @@ TCP 80 and UDP 2100.
 
 1. Turn on debug logging for the integration (**Enable debug logging** on the
    integration card), reproduce, then disable it to download the log.
-2. Lines starting with `CLIP v2 client asked for`, `CLIP v2 client request
-   not supported` and `First HueStream frame` show what the app tried.
+2. Lines starting with `CLIP v2 client asked for` and `First HueStream
+   frame` show what the app tried.
 3. **Download diagnostics** from the integration card: it reports the HTTPS
    listener status and the certificate fingerprint (no credentials).
