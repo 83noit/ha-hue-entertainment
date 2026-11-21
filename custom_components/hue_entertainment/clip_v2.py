@@ -21,6 +21,8 @@ _NAMESPACE = uuid.UUID("5f3c6a2e-8c1d-4b8e-9a43-0d6f2b1e7c55")
 _APPLICATION_NAMESPACE = uuid.UUID("0c7e2d84-3b9a-4f61-a5d2-6e8f1b4c9a37")
 
 BRIDGE_KEY = "bridge"
+HOME_KEY = "home"
+ROOM_NAME = "Entertainment"
 ENTERTAINMENT_GROUP_NAME = "TV Entertainment"
 GAMUT_C = {
     "red": {"x": 0.6915, "y": 0.3083},
@@ -125,16 +127,52 @@ def build_resources(
             "id": rid(b, BRIDGE_KEY, "bridge_home"),
             "id_v1": "/groups/0",
             "type": "bridge_home",
+            # Like a real home: the bridge device plus the room the lights are in
             "children": [ref(b, BRIDGE_KEY, "device")]
-            + [ref(b, light, "device") for light in lights],
-            "services": [],
+            + ([ref(b, BRIDGE_KEY, "room")] if lights else []),
+            "services": [ref(b, HOME_KEY, "grouped_light")],
         },
+        _grouped_light(b, HOME_KEY, owner=ref(b, BRIDGE_KEY, "bridge_home"), id_v1="/groups/0"),
     ]
     for i, light in enumerate(lights, 1):
         resources.extend(_light_resources(b, light, i))
     if lights:
+        resources.extend(_room(b, lights))
         resources.append(_entertainment_configuration(b, lights, active=active, owner=owner))
     return resources
+
+
+def _grouped_light(
+    b: str, key: str, *, owner: dict[str, str], id_v1: str | None = None
+) -> Resource:
+    """A grouped_light service (room or home). Reported, not controllable."""
+    group: Resource = {
+        "id": rid(b, key, "grouped_light"),
+        "type": "grouped_light",
+        "owner": owner,
+        "on": {"on": True},
+        "dimming": {"brightness": 100.0},
+        "alert": {"action_values": ["breathe"]},
+        "signaling": {"signal_values": ["no_signal", "on_off"]},
+    }
+    if id_v1:
+        group["id_v1"] = id_v1
+    return group
+
+
+def _room(b: str, lights: list[str]) -> list[Resource]:
+    """One room holding the selected lights (CLIP v2 only: v1 groups stay as the TV knows them)."""
+    room_ref = ref(b, BRIDGE_KEY, "room")
+    return [
+        {
+            "id": room_ref["rid"],
+            "type": "room",
+            "metadata": {"name": ROOM_NAME, "archetype": "living_room"},
+            "children": [ref(b, light, "device") for light in lights],
+            "services": [ref(b, BRIDGE_KEY, "grouped_light")],
+        },
+        _grouped_light(b, BRIDGE_KEY, owner=room_ref),
+    ]
 
 
 def _light_resources(b: str, light: str, light_id: int) -> list[Resource]:

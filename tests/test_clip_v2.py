@@ -86,6 +86,8 @@ class TestModel:
         assert counts == {
             "bridge": 1,
             "bridge_home": 1,
+            "room": 1,
+            "grouped_light": 2,
             "device": 1 + len(LIGHTS),
             "entertainment": 1 + len(LIGHTS),
             "light": len(LIGHTS),
@@ -132,6 +134,19 @@ class TestModel:
     def test_no_lights_no_configuration(self):
         resources = clip_v2.build_resources(BRIDGE_ID, [])
         assert not _by_type(resources, "entertainment_configuration")
+        assert not _by_type(resources, "room")
+
+    def test_home_and_room_like_a_real_bridge(self):
+        resources = clip_v2.build_resources(BRIDGE_ID, LIGHTS)
+        (home,) = _by_type(resources, "bridge_home")
+        (room,) = _by_type(resources, "room")
+        assert {"rid": room["id"], "rtype": "room"} in home["children"]
+        assert [s["rtype"] for s in home["services"]] == ["grouped_light"]
+        assert [c["rid"] for c in room["children"]] == [
+            clip_v2.rid(BRIDGE_ID, light, "device") for light in LIGHTS
+        ]
+        owners = {g["owner"]["rtype"] for g in _by_type(resources, "grouped_light")}
+        assert owners == {"room", "bridge_home"}
 
     def test_zigbee_mac_matches_v1_uniqueid(self):
         """Hue Essentials requires zigbee_connectivity.mac_address (observed 2026-11-21)."""
