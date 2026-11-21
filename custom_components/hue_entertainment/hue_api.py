@@ -312,9 +312,6 @@ class HueAPIServer:
 
     # CLIP v2, HTTPS listener only (real bridges don't serve it over plain HTTP)
     CLIP_ROUTES: tuple[tuple[str, str, str], ...] = (
-        # Hue Sync (desktop) pairs with POST /api/ — trailing slash. Kept off
-        # the shared v1 table: on hass.http, /api/ is Home Assistant's own.
-        ("POST", "/api/", "_handle_create_user"),
         ("GET", "/auth/v1", "_handle_auth_v1"),
         ("GET", "/clip/v2/resource", "_handle_clip_all"),
         ("GET", "/clip/v2/resource/{rtype}", "_handle_clip_rtype"),
@@ -326,9 +323,19 @@ class HueAPIServer:
     )
 
     def _register_routes(self, app: web.Application, clip: bool = False) -> None:
-        """Register the v1 routes (and CLIP v2 ones on HTTPS) on a standalone app."""
+        """Register the v1 routes (and CLIP v2 ones on HTTPS) on a standalone app.
+
+        On HTTPS every v1 path is also served with a trailing slash: Hue Sync
+        for macOS sends ``POST /api/`` and ``GET /api/config/``. Kept off plain
+        HTTP, whose table is shared with Home Assistant's server, where
+        ``/api/`` is Home Assistant's own.
+        """
         for method, path, attr in self.ROUTES + (self.CLIP_ROUTES if clip else ()):
             app.router.add_route(method, path, getattr(self, attr))
+        if clip:
+            for method, path, attr in self.ROUTES:
+                if not path.endswith("/"):
+                    app.router.add_route(method, f"{path}/", getattr(self, attr))
 
     async def handle(self, attr: str, request: web.Request) -> web.Response:
         """Dispatch a request to a handler by attribute name (used by ha_http views)."""

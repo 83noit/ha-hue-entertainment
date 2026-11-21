@@ -246,6 +246,17 @@ class TestRoutes:
         assert set(success) == {"username", "clientkey"}
         assert server.get_user_psk(success["username"]) == success["clientkey"]
 
+    async def test_v1_paths_accept_trailing_slash(self, clip):
+        """Hue Sync for macOS also asks for GET /api/config/ (observed 2026-11-21)."""
+        client, _ = clip
+        resp = await client.get("/api/config/")
+        assert resp.status == 200 and (await resp.json())["bridgeid"] == BRIDGE_ID
+        resp = await client.get(f"/api/{USER}/lights/")
+        assert resp.status == 200 and len(await resp.json()) == 3
+
+    async def test_plain_http_keeps_strict_paths(self, plain):
+        assert (await plain.post("/api/", json={"devicetype": "x"})).status == 404
+
     async def test_v1_still_served_alongside(self, clip):
         client, _ = clip
         resp = await client.get("/api/config")
