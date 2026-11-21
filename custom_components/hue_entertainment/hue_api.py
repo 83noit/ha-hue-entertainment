@@ -81,7 +81,7 @@ async def _request_logger(
 ) -> web.StreamResponse:
     """Log every request at DEBUG — shows exactly which endpoints the TV hits."""
     resp = await handler(request)
-    _LOGGER.debug("%s %s -> %d", request.method, _log_path(request), resp.status)
+    _LOGGER.debug("%s %s %s -> %d", request.remote, request.method, _log_path(request), resp.status)
     return resp
 
 
@@ -308,7 +308,7 @@ class HueAPIServer:
         """Dispatch a request to a handler by attribute name (used by ha_http views)."""
         handler: Callable[[web.Request], Awaitable[web.Response]] = getattr(self, attr)
         resp = await handler(request)
-        _LOGGER.debug("%s %s -> %d", request.method, _log_path(request), resp.status)
+        _LOGGER.debug("%s %s %s -> %d", request.remote, request.method, _log_path(request), resp.status)
         return resp
 
     # ---------------------------------------------------------------------------
