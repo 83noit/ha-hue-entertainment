@@ -253,7 +253,7 @@ class HueAPIServer:
         """Open the HTTPS listener; raises OSError if the port can't be bound."""
         if self._ssl_context is None or self._https_runner is not None:
             return
-        app = web.Application(middlewares=[_request_logger])
+        app = web.Application(middlewares=[_lan_only, _request_logger])
         self._register_routes(app, clip=True)
         runner = web.AppRunner(app)
         await runner.setup()

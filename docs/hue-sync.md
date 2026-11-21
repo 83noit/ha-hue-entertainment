@@ -59,6 +59,10 @@ If port 443 is taken:
   bridge bind `<bridge IP>:443` while another server holds `0.0.0.0:443`.
   Home Assistant OS has no secondary IPs, so this route isn't available there.
 
+Never forward port 443 (or 80) from your router to the bridge: it only
+answers requests coming directly from the local network, and refuses
+anything else.
+
 If port 443 becomes unavailable later (say, after installing an add-on), a
 **repair issue** appears; Ambilight keeps working either way.
 

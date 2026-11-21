@@ -462,3 +462,12 @@ class TestHueSyncFlow:
 
         cert = x509.load_der_x509_certificate(der)
         assert cert.subject.rfc4514_string() == f"CN={_BRIDGE_ID.lower()},O=Philips Hue,C=NL"
+
+    @pytest.mark.asyncio
+    async def test_https_refuses_proxied_requests(self, https_bridge):
+        """LAN-only like the HTTP server: a forwarded request gets a 404."""
+        session, *_ = https_bridge
+        async with session.get("/api/config") as resp:
+            assert resp.status == 200
+        async with session.get("/api/config", headers={"X-Forwarded-For": "1.1.1.1"}) as resp:
+            assert resp.status == 404
