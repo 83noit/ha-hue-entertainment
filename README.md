@@ -140,6 +140,7 @@ the TV's traffic with iptables. Both are walked through in
 - The TV must reach the HA host on **port 80 (TCP)** and **port 2100 (UDP)**
 - If the TV and HA are on different VLANs, **mDNS relay** must be enabled (e.g. Avahi, Unifi mDNS, or a multicast relay) — without it, the TV cannot discover the bridge
 - The TV ignores the port advertised by mDNS and always connects to port 80; only the IP address from mDNS is used
+- The bridge only answers direct requests from local (non-public) addresses: don't forward its ports from the internet or put it behind a reverse proxy — Hue clients never need either
 
 ## How the adaptive drain loop works
 
