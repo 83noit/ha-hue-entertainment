@@ -25,6 +25,7 @@ from .const import (
     CONF_BIND_IP,
     CONF_BRIDGE_ID,
     CONF_HTTP_MODE,
+    CONF_HTTPS_ENABLED,
     CONF_LIGHTS,
     CONF_PAIR_NOW,
     DEFAULT_API_PORT,
@@ -37,6 +38,7 @@ from .const import (
 )
 from .discovery import HueBridgeDiscovery
 from .ha_http import async_get_http_host, resolve_use_ha_http
+from .https import ha_holds_https_port, probe_port
 from .hue_api import HueAPIServer
 from .user_store import UserStore
 
@@ -236,19 +238,32 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         self._lights: list[str] = []
         self._bind_ip: str | None = None
         self._http_mode: str = DEFAULT_HTTP_MODE
+        self._https_enabled = False
         self._paired = False
         self._pairing_task: asyncio.Task | None = None
 
     async def async_step_init(self, user_input=None):
         """Show lights selection and optional re-pair toggle."""
         errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {"error": ""}
+        https_was_enabled = self.config_entry.options.get(
+            CONF_HTTPS_ENABLED, self.config_entry.data.get(CONF_HTTPS_ENABLED, False)
+        )
         if user_input is not None:
             self._lights = user_input[CONF_LIGHTS]
             self._http_mode = user_input.get(CONF_HTTP_MODE, DEFAULT_HTTP_MODE)
+            self._https_enabled = user_input.get(CONF_HTTPS_ENABLED, False)
             raw_ip = (user_input.get(CONF_BIND_IP) or "").strip()
             if raw_ip and not _is_ipv4(raw_ip):
                 errors[CONF_BIND_IP] = "invalid_ip"
-            else:
+            elif self._https_enabled and not https_was_enabled:
+                # Switching HTTPS on: refuse to save a setting that can't work
+                if ha_holds_https_port(self.hass, raw_ip or None):
+                    errors[CONF_HTTPS_ENABLED] = "https_port_used_by_ha"
+                elif err := await self.hass.async_add_executor_job(probe_port, raw_ip or None):
+                    errors[CONF_HTTPS_ENABLED] = "https_port_unavailable"
+                    placeholders["error"] = str(err)
+            if not errors:
                 self._bind_ip = raw_ip or None
                 if user_input.get(CONF_PAIR_NOW, False):
                     return await self.async_step_pairing()
@@ -266,11 +281,13 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         current_mode = self.config_entry.options.get(
             CONF_HTTP_MODE, self.config_entry.data.get(CONF_HTTP_MODE, DEFAULT_HTTP_MODE)
         )
+        current_https = https_was_enabled
         if user_input is not None:
             # Re-show what the user typed
             current_lights = user_input[CONF_LIGHTS]
             current_bind_ip = user_input.get(CONF_BIND_IP, "")
             current_mode = user_input.get(CONF_HTTP_MODE, current_mode)
+            current_https = user_input.get(CONF_HTTPS_ENABLED, current_https)
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -289,9 +306,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                             mode=SelectSelectorMode.DROPDOWN,
                         )
                     ),
+                    vol.Optional(CONF_HTTPS_ENABLED, default=current_https): BooleanSelector(),
                 }
             ),
             errors=errors,
+            description_placeholders=placeholders,
         )
 
     def _options(self) -> dict:
@@ -299,6 +318,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             CONF_LIGHTS: self._lights,
             CONF_BIND_IP: self._bind_ip,
             CONF_HTTP_MODE: self._http_mode,
+            CONF_HTTPS_ENABLED: self._https_enabled,
         }
 
     async def async_step_pairing(self, user_input=None):

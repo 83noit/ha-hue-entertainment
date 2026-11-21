@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import ssl
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlparse
 
 import voluptuous as vol
@@ -24,6 +26,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util.network import is_loopback
 
+from .certificate import certificate_fingerprint, create_ssl_context, ensure_certificate
 from .config_flow import mac_from_bridge_id
 from .const import (
     CONF_API_PORT,
@@ -31,6 +34,7 @@ from .const import (
     CONF_BRIDGE_ID,
     CONF_ENTERTAINMENT_PORT,
     CONF_HTTP_MODE,
+    CONF_HTTPS_ENABLED,
     CONF_LIGHTS,
     DEFAULT_API_PORT,
     DEFAULT_ENTERTAINMENT_PORT,
@@ -38,6 +42,11 @@ from .const import (
     DOMAIN,
     FRAME_TIMEOUT,
     FRAME_WATCHDOG_INTERVAL,
+    HTTPS_DISABLED,
+    HTTPS_LISTENING,
+    HTTPS_PORT,
+    HTTPS_PORT_UNAVAILABLE,
+    HTTPS_PORT_USED_BY_HA,
     MAX_SETTLE_SECONDS,
     MAX_YIELD_SECONDS,
     SIGNAL_ENTERTAINMENT_CHANGED,
@@ -46,6 +55,7 @@ from .discovery import HueBridgeDiscovery
 from .dtls_psk import DTLSPSKServer
 from .entertainment import EntertainmentEngine, FrameMailbox, LightMapping
 from .ha_http import async_get_http_host, resolve_use_ha_http
+from .https import async_set_https_issue, cert_path, ha_holds_https_port
 from .hue_api import HueAPIServer
 from .user_store import UserStore
 
@@ -143,6 +153,8 @@ class HueEntertainmentData:
     user_store: UserStore
     mailbox: FrameMailbox
     cancel_watchdog: Callable[[], None]
+    https_status: str = HTTPS_DISABLED
+    cert_fingerprint: str | None = None
 
 
 type HueEntertainmentConfigEntry = ConfigEntry[HueEntertainmentData]
@@ -212,7 +224,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
     if initial_users:
         await user_store.async_save()
 
-    # API server (HTTP only — TV never uses HTTPS)
+    # Opt-in HTTPS listener for official CLIP v2 clients (Hue Sync app). The
+    # Ambilight TV only uses HTTP + DTLS; nothing below depends on HTTPS.
+    https_enabled: bool = entry.options.get(
+        CONF_HTTPS_ENABLED, entry.data.get(CONF_HTTPS_ENABLED, False)
+    )
+    ssl_context = None
+    fingerprint: str | None = None
+    if https_enabled:
+        ssl_context, fingerprint = await hass.async_add_executor_job(
+            _load_tls, cert_path(hass, bridge_id), bridge_id
+        )
+
     api_server = HueAPIServer(
         bridge_id=bridge_id,
         mac=mac,
@@ -223,6 +246,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
         user_store=user_store,
         bind_ip=bind_ip,
         http_host=http_host,
+        ssl_context=ssl_context,
+        https_port=HTTPS_PORT,
     )
 
     # DTLS server — always listening; TV may probe before the REST "start" action
@@ -355,7 +380,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
         user_store=user_store,
         mailbox=mailbox,
         cancel_watchdog=_cancel_watchdog,
+        cert_fingerprint=fingerprint,
     )
+
+    async def _async_start_https() -> None:
+        """Open :443 if enabled; on conflict raise a repair issue, never fail setup."""
+        status, error = HTTPS_DISABLED, ""
+        if https_enabled:
+            if ha_holds_https_port(hass, bind_ip):
+                status = HTTPS_PORT_USED_BY_HA
+            else:
+                try:
+                    await api_server.async_start_https()
+                    status = HTTPS_LISTENING
+                except OSError as err:
+                    status, error = HTTPS_PORT_UNAVAILABLE, str(err)
+            if status != HTTPS_LISTENING:
+                _LOGGER.warning(
+                    "Hue Sync app support is enabled but port 443 is not available (%s%s); "
+                    "Ambilight keeps working",
+                    status,
+                    f": {error}" if error else "",
+                )
+        entry.runtime_data.https_status = status
+        async_set_https_issue(hass, status, error)
 
     async def _async_start(_event: Event | None = None) -> None:
         """Start servers once HA is fully running."""
@@ -370,6 +418,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
                 f"Cannot bind Hue bridge ports (http={http_port}, dtls={ent_port}): {err}"
             ) from err
         await discovery.async_start()
+        await _async_start_https()
         _LOGGER.info(
             "Hue Entertainment Bridge started: bridge_id=%s, http=%s:%d, dtls=:%d, lights=%d, users=%d",
             bridge_id,
@@ -441,8 +490,21 @@ async def async_unload_entry(hass: HomeAssistant, entry: HueEntertainmentConfigE
     await data.dtls_server.async_stop()
     await data.api_server.async_stop()
     await data.discovery.async_stop()
+    async_set_https_issue(hass, None)
     await data.engine.async_restore_lights()
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEntry) -> None:
+    """Delete the bridge certificate with the entry."""
+    path = cert_path(hass, entry.data[CONF_BRIDGE_ID])
+    await hass.async_add_executor_job(path.unlink, True)
+
+
+def _load_tls(path: Path, bridge_id: str) -> tuple[ssl.SSLContext, str]:
+    """Create/reuse the bridge certificate and build the server context (blocking)."""
+    ensure_certificate(path, bridge_id)
+    return create_ssl_context(path), certificate_fingerprint(path)
 
 
 async def _async_get_host_ip(hass: HomeAssistant) -> str:

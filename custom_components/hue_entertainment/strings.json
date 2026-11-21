@@ -87,12 +87,14 @@
           "lights": "Lights",
           "pair_now": "Pair TV now",
           "bind_ip": "Bind IP address",
-          "http_mode": "Hue API server"
+          "http_mode": "Hue API server",
+          "https_enabled": "Hue Sync app support (experimental)"
         },
         "data_description": {
           "pair_now": "Opens a 60-second pairing window after saving.",
-          "bind_ip": "Leave blank to use the auto-detected HA host IP. Set to a secondary IP address (e.g. a macvlan interface) to bind the bridge's HTTP and DTLS servers to that address only, freeing port 80 on the primary IP for Traefik or Nginx.",
-          "http_mode": "Where the Hue REST API is served. Automatic: uses Home Assistant's own web server when it listens on port 80 without HTTPS (Settings → System → Network, HA 2026.8+), otherwise a standalone server on port 80. Change only if the automatic choice is wrong."
+          "bind_ip": "Leave blank to use the auto-detected HA host IP. Set to a secondary IP address (e.g. a macvlan interface) to bind the bridge's HTTP, HTTPS and DTLS servers to that address only, freeing ports 80 and 443 on the primary IP for Home Assistant, Traefik or Nginx.",
+          "http_mode": "Where the Hue REST API is served. Automatic: uses Home Assistant's own web server when it listens on port 80 without HTTPS (Settings → System → Network, HA 2026.8+), otherwise a standalone server on port 80. Change only if the automatic choice is wrong.",
+          "https_enabled": "Opens an HTTPS server on port 443 with a Hue-bridge-style certificate, as the official Hue Sync app expects (e.g. on Samsung TVs). Not needed for Philips Ambilight TVs. Untested with a real Hue Sync app so far — see the README."
         }
       },
       "pairing": {
@@ -108,7 +110,9 @@
       "waiting_for_tv": "Waiting for your TV to pair…"
     },
     "error": {
-      "invalid_ip": "Not a valid IPv4 address"
+      "invalid_ip": "Not a valid IPv4 address",
+      "https_port_used_by_ha": "Home Assistant's own web server uses port 443. Move it off 443 (Settings → System → Network), or set a separate bind IP for the bridge.",
+      "https_port_unavailable": "Port 443 is not available: {error}"
     }
   },
   "selector": {
@@ -118,6 +122,16 @@
         "standalone": "Standalone server on port 80",
         "homeassistant": "Home Assistant's web server"
       }
+    }
+  },
+  "issues": {
+    "https_port_used_by_ha": {
+      "title": "Hue Sync app support can't use port 443",
+      "description": "Hue Sync app support is enabled, but Home Assistant's own web server listens on port {port}, and the Hue Sync app only connects to that port. Ambilight keeps working.\n\nTo fix it, either move Home Assistant's web server off port {port} (Settings → System → Network), or give the bridge its own IP address with the **Bind IP address** option (Container/Core installs; Home Assistant must then listen on its main IP only). Otherwise, turn Hue Sync app support off in the integration's options."
+    },
+    "https_port_unavailable": {
+      "title": "Hue Sync app support can't open port 443",
+      "description": "Hue Sync app support is enabled, but port {port} could not be opened: {error}. Ambilight keeps working.\n\nAnother service (for example a reverse proxy add-on) probably holds the port. Free it, or give the bridge its own IP address with the **Bind IP address** option, then reload the integration. Otherwise, turn Hue Sync app support off in the integration's options."
     }
   },
   "exceptions": {

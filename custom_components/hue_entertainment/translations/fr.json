@@ -87,12 +87,14 @@
           "lights": "Lumières",
           "pair_now": "Connecter le téléviseur maintenant",
           "bind_ip": "Lier à l'adresse IP",
-          "http_mode": "Serveur API Hue"
+          "http_mode": "Serveur API Hue",
+          "https_enabled": "Prise en charge de l'app Hue Sync (expérimental)"
         },
         "data_description": {
           "pair_now": "Ouvre une fenêtre de connexion de 60 secondes après l'enregistrement.",
-          "bind_ip": "Laissez vide pour utiliser l'adresse IP de l'hôte HA détectée automatiquement. Renseignez une adresse IP secondaire (ex. une interface macvlan) pour que les serveurs HTTP et DTLS du pont écoutent uniquement sur cette adresse, libérant ainsi le port 80 sur l'IP principale pour Traefik ou Nginx.",
-          "http_mode": "Où l'API REST Hue est servie. Automatique : utilise le serveur web de Home Assistant lorsqu'il écoute sur le port 80 sans HTTPS (Paramètres → Système → Réseau, HA 2026.8+), sinon un serveur autonome sur le port 80. Ne changez que si le choix automatique est incorrect."
+          "bind_ip": "Laissez vide pour utiliser l'adresse IP de l'hôte HA détectée automatiquement. Renseignez une adresse IP secondaire (ex. une interface macvlan) pour que les serveurs HTTP, HTTPS et DTLS du pont écoutent uniquement sur cette adresse, libérant ainsi les ports 80 et 443 sur l'IP principale pour Home Assistant, Traefik ou Nginx.",
+          "http_mode": "Où l'API REST Hue est servie. Automatique : utilise le serveur web de Home Assistant lorsqu'il écoute sur le port 80 sans HTTPS (Paramètres → Système → Réseau, HA 2026.8+), sinon un serveur autonome sur le port 80. Ne changez que si le choix automatique est incorrect.",
+          "https_enabled": "Ouvre un serveur HTTPS sur le port 443 avec un certificat de type pont Hue, comme l'attend l'app officielle Hue Sync (par ex. sur les téléviseurs Samsung). Inutile pour les téléviseurs Philips Ambilight. Pas encore testé avec une vraie app Hue Sync — voir le README."
         }
       },
       "pairing": {
@@ -108,7 +110,9 @@
       "waiting_for_tv": "En attente de la connexion de votre téléviseur…"
     },
     "error": {
-      "invalid_ip": "Adresse IPv4 invalide"
+      "invalid_ip": "Adresse IPv4 invalide",
+      "https_port_used_by_ha": "Le serveur web de Home Assistant utilise le port 443. Déplacez-le hors du port 443 (Paramètres → Système → Réseau), ou renseignez une adresse IP distincte pour le pont.",
+      "https_port_unavailable": "Le port 443 n'est pas disponible : {error}"
     }
   },
   "selector": {
@@ -118,6 +122,16 @@
         "standalone": "Serveur autonome sur le port 80",
         "homeassistant": "Serveur web de Home Assistant"
       }
+    }
+  },
+  "issues": {
+    "https_port_used_by_ha": {
+      "title": "La prise en charge de l'app Hue Sync ne peut pas utiliser le port 443",
+      "description": "La prise en charge de l'app Hue Sync est activée, mais le serveur web de Home Assistant écoute sur le port {port}, le seul que l'app Hue Sync utilise. Ambilight continue de fonctionner.\n\nPour corriger : déplacez le serveur web de Home Assistant hors du port {port} (Paramètres → Système → Réseau), ou attribuez au pont sa propre adresse IP avec l'option **Lier à l'adresse IP** (installations Container/Core ; Home Assistant doit alors n'écouter que sur son IP principale). Sinon, désactivez la prise en charge de l'app Hue Sync dans les options de l'intégration."
+    },
+    "https_port_unavailable": {
+      "title": "La prise en charge de l'app Hue Sync ne peut pas ouvrir le port 443",
+      "description": "La prise en charge de l'app Hue Sync est activée, mais le port {port} n'a pas pu être ouvert : {error}. Ambilight continue de fonctionner.\n\nUn autre service (par exemple un module complémentaire de proxy inverse) occupe probablement ce port. Libérez-le, ou attribuez au pont sa propre adresse IP avec l'option **Lier à l'adresse IP**, puis rechargez l'intégration. Sinon, désactivez la prise en charge de l'app Hue Sync dans les options de l'intégration."
     }
   },
   "exceptions": {

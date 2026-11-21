@@ -9,6 +9,7 @@ CONF_BRIDGE_ID = "bridge_id"
 CONF_PAIR_NOW = "pair_now"
 CONF_BIND_IP = "bind_ip"
 CONF_HTTP_MODE = "http_mode"
+CONF_HTTPS_ENABLED = "https_enabled"  # opt-in HTTPS + CLIP v2 listener (Hue Sync app)
 
 # Where the Hue REST API is served from
 HTTP_MODE_AUTO = "auto"  # HA's own server if it listens on :80 without TLS, else standalone
@@ -18,6 +19,7 @@ DEFAULT_HTTP_MODE = HTTP_MODE_AUTO
 
 DEFAULT_ENTERTAINMENT_PORT = 2100
 DEFAULT_API_PORT = 80
+HTTPS_PORT = 443  # official clients hardcode it; not an option
 
 # HueStream protocol
 HUESTREAM_HEADER = b"HueStream"
@@ -65,6 +67,12 @@ MAX_YIELD_SECONDS = 30.0  # hard cap, enforced at the service schema — a calle
 # should waste seconds, not tie up an alarm/bedtime sequence for 30 of them.
 DEFAULT_SETTLE_SECONDS = 0.0  # opt-in — off unless a caller asks for it
 MAX_SETTLE_SECONDS = 5.0
+
+# HTTPS listener status (diagnostics; repair issue ids for the two failures)
+HTTPS_DISABLED = "disabled"
+HTTPS_LISTENING = "listening"
+HTTPS_PORT_USED_BY_HA = "https_port_used_by_ha"
+HTTPS_PORT_UNAVAILABLE = "https_port_unavailable"
 
 # Dispatcher signal
 SIGNAL_ENTERTAINMENT_CHANGED = f"{DOMAIN}_entertainment_changed"

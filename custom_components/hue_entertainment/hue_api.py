@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import logging
 import secrets
+import ssl
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -17,6 +18,7 @@ from .const import (
     BRIDGE_API_VERSION,
     BRIDGE_MODEL_ID,
     BRIDGE_SW_VERSION,
+    HTTPS_PORT,
     LINK_BUTTON_TIMEOUT,
 )
 from .user_store import UserStore
@@ -104,6 +106,8 @@ class HueAPIServer:
         user_store: UserStore | None = None,
         bind_ip: str | None = None,
         http_host: Any = None,
+        ssl_context: ssl.SSLContext | None = None,
+        https_port: int = HTTPS_PORT,
     ) -> None:
         self._bridge_id = bridge_id
         self._mac = mac
@@ -131,6 +135,11 @@ class HueAPIServer:
         self._on_light_command: Callable[[int, dict], None] | None = None
 
         self._http_runner: web.AppRunner | None = None
+        # Opt-in HTTPS listener (official CLIP v2 clients); always standalone,
+        # since it must present the bridge-shaped certificate.
+        self._ssl_context = ssl_context
+        self._https_port = https_port
+        self._https_runner: web.AppRunner | None = None
 
     def set_entertainment_callbacks(
         self,
@@ -201,6 +210,29 @@ class HueAPIServer:
         await http_site.start()
         _LOGGER.info("Hue API HTTP server on %s:%d", bind_addr, self._http_port)
 
+    @property
+    def https_listening(self) -> bool:
+        """Whether the HTTPS listener is up."""
+        return self._https_runner is not None
+
+    async def async_start_https(self) -> None:
+        """Open the HTTPS listener; raises OSError if the port can't be bound."""
+        if self._ssl_context is None or self._https_runner is not None:
+            return
+        app = web.Application(middlewares=[_request_logger])
+        self._register_routes(app)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        bind_addr = self._bind_ip or "0.0.0.0"
+        site = web.TCPSite(runner, bind_addr, self._https_port, ssl_context=self._ssl_context)
+        try:
+            await site.start()
+        except OSError:
+            await runner.cleanup()
+            raise
+        self._https_runner = runner
+        _LOGGER.info("Hue API HTTPS server on %s:%d", bind_addr, self._https_port)
+
     async def async_stop(self) -> None:
         """Stop serving."""
         if self._http_host is not None:
@@ -208,6 +240,9 @@ class HueAPIServer:
         if self._http_runner:
             await self._http_runner.cleanup()
             self._http_runner = None
+        if self._https_runner:
+            await self._https_runner.cleanup()
+            self._https_runner = None
         _LOGGER.info("Hue API server stopped")
 
     # (method, path, handler attribute) — shared by the standalone aiohttp app and

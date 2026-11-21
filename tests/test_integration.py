@@ -253,6 +253,7 @@ async def test_options_flow_validates_bind_ip(hass: HomeAssistant) -> None:
         CONF_LIGHTS: LIGHTS,
         CONF_BIND_IP: "127.0.0.1",
         CONF_HTTP_MODE: "auto",
+        const.CONF_HTTPS_ENABLED: False,
     }
     assert entry.state is ConfigEntryState.LOADED
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -652,3 +653,193 @@ def test_mac_from_bridge_id_is_positional():
 
     assert mac_from_bridge_id("FFFE12FFFE345678") == "ff:fe:12:34:56:78"
     assert mac_from_bridge_id("001788FFFE0AB1C2") == "00:17:88:0a:b1:c2"
+
+
+# ---------------------------------------------------------------------------
+# HTTPS listener (opt-in Hue Sync app support)
+# ---------------------------------------------------------------------------
+
+import socket  # noqa: E402
+import ssl  # noqa: E402
+
+from homeassistant.helpers import issue_registry as ir  # noqa: E402
+
+from custom_components.hue_entertainment.const import (  # noqa: E402
+    CONF_HTTPS_ENABLED,
+    HTTPS_DISABLED,
+    HTTPS_LISTENING,
+    HTTPS_PORT_UNAVAILABLE,
+    HTTPS_PORT_USED_BY_HA,
+)
+
+
+def _free_tcp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture
+def https_port(tmp_path):
+    """Ephemeral port instead of 443, certificate under tmp_path."""
+    port = _free_tcp_port()
+    pem = tmp_path / "bridge.pem"
+    with (
+        patch("custom_components.hue_entertainment.HTTPS_PORT", port),
+        patch("custom_components.hue_entertainment.cert_path", return_value=pem),
+    ):
+        yield port
+
+
+def _issue(hass, issue_id):
+    return ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+
+
+def _peer_cert(port: int) -> dict:
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    with (
+        socket.create_connection(("127.0.0.1", port), timeout=5) as raw,
+        ctx.wrap_socket(raw) as tls,
+    ):
+        der = tls.getpeercert(binary_form=True)
+    from cryptography import x509  # noqa: PLC0415
+
+    cert = x509.load_der_x509_certificate(der)
+    return {"cn": cert.subject.rfc4514_string(), "serial": cert.serial_number}
+
+
+async def test_https_is_off_by_default(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, _entry())
+    data = entry.runtime_data
+    assert data.https_status == HTTPS_DISABLED
+    assert not data.api_server.https_listening
+    assert data.cert_fingerprint is None
+    assert _issue(hass, HTTPS_PORT_USED_BY_HA) is None
+    assert _issue(hass, HTTPS_PORT_UNAVAILABLE) is None
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_https_enabled_serves_bridge_certificate(hass, https_port, tmp_path) -> None:
+    entry = await _setup(hass, _entry(**{CONF_HTTPS_ENABLED: True}))
+    data = entry.runtime_data
+    assert data.https_status == HTTPS_LISTENING
+    assert data.api_server.https_listening
+    assert data.cert_fingerprint and (tmp_path / "bridge.pem").exists()
+
+    peer = await hass.async_add_executor_job(_peer_cert, https_port)
+    assert peer["cn"] == f"CN={BRIDGE_ID.lower()},O=Philips Hue,C=NL"
+    assert peer["serial"] == int(BRIDGE_ID, 16)
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert not data.api_server.https_listening
+    assert (tmp_path / "bridge.pem").exists()  # kept across reloads
+    await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+    assert not (tmp_path / "bridge.pem").exists()
+
+
+async def test_https_skipped_when_ha_holds_443(hass, https_port) -> None:
+    assert await async_setup_component(hass, "http", {})
+    hass.http.server_port = 443
+    entry = await _setup(hass, _entry(**{CONF_HTTPS_ENABLED: True}))
+    data = entry.runtime_data
+    assert data.https_status == HTTPS_PORT_USED_BY_HA
+    assert not data.api_server.https_listening
+    assert _issue(hass, HTTPS_PORT_USED_BY_HA) is not None
+    assert data.dtls_server._thread.is_alive()  # Ambilight path unaffected
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert _issue(hass, HTTPS_PORT_USED_BY_HA) is None
+
+
+async def test_https_with_bind_ip_ignores_ha_on_443(hass, https_port) -> None:
+    """A separate bridge IP is the escape hatch: try the bind instead of refusing."""
+    assert await async_setup_component(hass, "http", {})
+    hass.http.server_port = 443
+    entry = await _setup(hass, _entry(**{CONF_HTTPS_ENABLED: True, CONF_BIND_IP: "127.0.0.1"}))
+    assert entry.runtime_data.https_status == HTTPS_LISTENING
+    assert _issue(hass, HTTPS_PORT_USED_BY_HA) is None
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_https_bind_failure_raises_issue_but_entry_loads(hass, https_port) -> None:
+    with patch(
+        "custom_components.hue_entertainment.HueAPIServer.async_start_https",
+        side_effect=OSError(98, "Address already in use"),
+    ):
+        entry = await _setup(hass, _entry(**{CONF_HTTPS_ENABLED: True}))
+    data = entry.runtime_data
+    assert data.https_status == HTTPS_PORT_UNAVAILABLE
+    issue = _issue(hass, HTTPS_PORT_UNAVAILABLE)
+    assert issue is not None and "Address already in use" in issue.translation_placeholders["error"]
+    assert data.dtls_server._thread.is_alive()
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert _issue(hass, HTTPS_PORT_UNAVAILABLE) is None
+
+
+def _options(**extra) -> dict:
+    return {CONF_LIGHTS: LIGHTS, CONF_PAIR_NOW: False, CONF_BIND_IP: "", **extra}
+
+
+async def test_options_refuse_https_when_ha_holds_443(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, _entry())
+    hass.http.server_port = 443
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], _options(**{CONF_HTTPS_ENABLED: True})
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_HTTPS_ENABLED: HTTPS_PORT_USED_BY_HA}
+    assert CONF_HTTPS_ENABLED not in entry.options
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_options_refuse_https_when_port_busy(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, _entry())
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    with patch(
+        "custom_components.hue_entertainment.config_flow.probe_port",
+        return_value=OSError(98, "Address already in use"),
+    ):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], _options(**{CONF_HTTPS_ENABLED: True})
+        )
+    assert result["errors"] == {CONF_HTTPS_ENABLED: HTTPS_PORT_UNAVAILABLE}
+    assert "Address already in use" in result["description_placeholders"]["error"]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_options_enable_https_starts_listener(hass, https_port) -> None:
+    entry = await _setup(hass, _entry())
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    with patch("custom_components.hue_entertainment.config_flow.probe_port", return_value=None):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], _options(**{CONF_HTTPS_ENABLED: True})
+        )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    assert entry.runtime_data.https_status == HTTPS_LISTENING
+
+    # Already enabled (our own listener holds the port): saving again must not re-check
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], _options(**{CONF_HTTPS_ENABLED: True})
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    assert entry.runtime_data.https_status == HTTPS_LISTENING
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_diagnostics_report_https(hass, https_port) -> None:
+    from custom_components.hue_entertainment.diagnostics import (  # noqa: PLC0415
+        async_get_config_entry_diagnostics,
+    )
+
+    entry = await _setup(hass, _entry(**{CONF_HTTPS_ENABLED: True}))
+    diag = await async_get_config_entry_diagnostics(hass, entry)
+    assert diag["https"]["status"] == HTTPS_LISTENING
+    assert diag["https"]["certificate_sha256"] == entry.runtime_data.cert_fingerprint
+    assert await hass.config_entries.async_unload(entry.entry_id)

@@ -34,6 +34,10 @@ async def async_get_config_entry_diagnostics(
         },
         "engine": data.engine.stats,
         "dtls": {"frames_coalesced_in_mailbox": data.mailbox.coalesced},
+        "https": {
+            "status": data.https_status,
+            "certificate_sha256": data.cert_fingerprint,
+        },
     }
 
 
