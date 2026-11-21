@@ -843,3 +843,19 @@ async def test_diagnostics_report_https(hass, https_port) -> None:
     assert diag["https"]["status"] == HTTPS_LISTENING
     assert diag["https"]["certificate_sha256"] == entry.runtime_data.cert_fingerprint
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_unusable_certificate_keeps_ambilight_running(hass, https_port) -> None:
+    """A certificate that can't be loaded (even after regenerating) disables HTTPS
+    with a repair issue; the entry and the v1/DTLS path still load."""
+    with patch(
+        "custom_components.hue_entertainment.create_ssl_context",
+        side_effect=ssl.SSLError("bad key"),
+    ):
+        entry = await _setup(hass, _entry(**{CONF_HTTPS_ENABLED: True}))
+    data = entry.runtime_data
+    assert data.https_status == HTTPS_PORT_UNAVAILABLE
+    assert "certificate" in _issue(hass, HTTPS_PORT_UNAVAILABLE).translation_placeholders["error"]
+    assert not data.api_server.https_listening
+    assert data.dtls_server._thread.is_alive()
+    assert await hass.config_entries.async_unload(entry.entry_id)

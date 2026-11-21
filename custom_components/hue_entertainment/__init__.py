@@ -231,10 +231,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
     )
     ssl_context = None
     fingerprint: str | None = None
+    tls_error = ""
     if https_enabled:
-        ssl_context, fingerprint = await hass.async_add_executor_job(
-            _load_tls, cert_path(hass, bridge_id), bridge_id
-        )
+        try:
+            ssl_context, fingerprint = await hass.async_add_executor_job(
+                _load_tls, cert_path(hass, bridge_id), bridge_id
+            )
+        except (OSError, ValueError) as err:  # ssl.SSLError is an OSError
+            # The Ambilight path must never depend on HTTPS: carry on without
+            # it and report the failure like a lost port.
+            tls_error = f"certificate: {err}"
+            _LOGGER.error("Cannot load the bridge certificate: %s", err)
 
     api_server = HueAPIServer(
         bridge_id=bridge_id,
@@ -387,7 +394,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
         """Open :443 if enabled; on conflict raise a repair issue, never fail setup."""
         status, error = HTTPS_DISABLED, ""
         if https_enabled:
-            if ha_holds_https_port(hass, bind_ip):
+            if tls_error:
+                status, error = HTTPS_PORT_UNAVAILABLE, tls_error
+            elif ha_holds_https_port(hass, bind_ip):
                 status = HTTPS_PORT_USED_BY_HA
             else:
                 try:
@@ -502,9 +511,17 @@ async def async_remove_entry(hass: HomeAssistant, entry: HueEntertainmentConfigE
 
 
 def _load_tls(path: Path, bridge_id: str) -> tuple[ssl.SSLContext, str]:
-    """Create/reuse the bridge certificate and build the server context (blocking)."""
+    """Create/reuse the bridge certificate and build the server context (blocking).
+
+    If the existing file can't be loaded, generate a fresh one once.
+    """
     ensure_certificate(path, bridge_id)
-    return create_ssl_context(path), certificate_fingerprint(path)
+    try:
+        return create_ssl_context(path), certificate_fingerprint(path)
+    except (OSError, ValueError):
+        _LOGGER.warning("Bridge certificate unusable, generating a new one")
+        ensure_certificate(path, bridge_id, regenerate=True)
+        return create_ssl_context(path), certificate_fingerprint(path)
 
 
 async def _async_get_host_ip(hass: HomeAssistant) -> str:

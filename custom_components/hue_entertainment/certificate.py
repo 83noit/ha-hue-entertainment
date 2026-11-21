@@ -74,22 +74,31 @@ def build_certificate(bridge_id: str) -> tuple[ec.EllipticCurvePrivateKey, x509.
     return key, cert
 
 
-def _cert_matches(pem: bytes, bridge_id: str) -> bool:
+def _usable(pem: bytes, bridge_id: str) -> bool:
+    """The file holds a key and a certificate for ``bridge_id`` that belong together."""
     try:
         cert = x509.load_pem_x509_certificate(pem)
-    except ValueError:
+        key = serialization.load_pem_private_key(pem, password=None)
+    except (ValueError, TypeError):
         return False
     cns = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
-    return bool(cns) and cns[0].value == bridge_id.lower()
+    if not cns or cns[0].value != bridge_id.lower():
+        return False
+    return key.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    ) == cert.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
 
 
-def ensure_certificate(path: Path, bridge_id: str) -> Path:
+def ensure_certificate(path: Path, bridge_id: str, *, regenerate: bool = False) -> Path:
     """Make sure ``path`` holds a key + certificate for ``bridge_id``.
 
-    Reuses an existing file whose certificate CN matches the bridge id;
-    otherwise (missing, unreadable, other bridge) writes a new one, mode 0600.
+    Reuses an existing file whose certificate is for this bridge and matches
+    its key; otherwise (missing, damaged, other bridge, or ``regenerate``)
+    writes a new one atomically, mode 0600.
     """
-    if path.exists() and _cert_matches(path.read_bytes(), bridge_id):
+    if not regenerate and path.exists() and _usable(path.read_bytes(), bridge_id):
         return path
     key, cert = build_certificate(bridge_id)
     data = key.private_bytes(
@@ -98,10 +107,19 @@ def ensure_certificate(path: Path, bridge_id: str) -> Path:
         serialization.NoEncryption(),
     ) + cert.public_bytes(serialization.Encoding.PEM)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(data)
-    os.chmod(path, 0o600)  # O_CREAT's mode is ignored when the file already existed
+    # Write a temporary file and rename it over the old one: a crash or full
+    # disk mid-write never leaves a half-written certificate behind.
+    tmp = path.with_name(f".{path.name}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, 0o600)  # O_CREAT's mode is ignored when the file already existed
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
     _LOGGER.info("Generated bridge certificate for %s", bridge_id)
     return path
 

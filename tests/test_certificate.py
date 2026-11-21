@@ -98,6 +98,36 @@ class TestEnsure:
         assert _load(path).serial_number == int(BRIDGE_ID, 16)
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
+    def test_regenerated_when_key_does_not_match(self, tmp_path):
+        """Right CN, wrong key: the TLS context would fail to load — replace it."""
+        path = certificate.ensure_certificate(tmp_path / "bridge.pem", BRIDGE_ID)
+        other_key, _ = certificate.build_certificate(BRIDGE_ID)
+        from cryptography.hazmat.primitives import serialization  # noqa: PLC0415
+
+        cert_pem = path.read_bytes().split(b"-----BEGIN CERTIFICATE-----")[1]
+        path.write_bytes(
+            other_key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+            + b"-----BEGIN CERTIFICATE-----"
+            + cert_pem
+        )
+        certificate.ensure_certificate(path, BRIDGE_ID)
+        certificate.create_ssl_context(path)  # loads: key and cert match again
+
+    def test_regenerated_when_truncated(self, tmp_path):
+        path = certificate.ensure_certificate(tmp_path / "bridge.pem", BRIDGE_ID)
+        path.write_bytes(path.read_bytes()[:200])
+        certificate.ensure_certificate(path, BRIDGE_ID)
+        certificate.create_ssl_context(path)
+
+    def test_write_leaves_no_temporary_file(self, tmp_path):
+        certificate.ensure_certificate(tmp_path / "bridge.pem", BRIDGE_ID)
+        certificate.ensure_certificate(tmp_path / "bridge.pem", BRIDGE_ID, regenerate=True)
+        assert [p.name for p in tmp_path.iterdir()] == ["bridge.pem"]
+
     def test_fingerprint(self, tmp_path):
         path = certificate.ensure_certificate(tmp_path / "bridge.pem", BRIDGE_ID)
         fp = certificate.certificate_fingerprint(path)
