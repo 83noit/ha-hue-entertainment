@@ -263,6 +263,16 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 elif err := await self.hass.async_add_executor_job(probe_port, raw_ip or None):
                     errors[CONF_HTTPS_ENABLED] = "https_port_unavailable"
                     placeholders["error"] = str(err)
+            if (
+                not errors
+                and self._https_enabled
+                and not https_was_enabled
+                and user_input.get(CONF_PAIR_NOW, False)
+            ):
+                # The HTTPS listener only starts once these options are saved
+                # (entry reload): a pairing window opened now couldn't be
+                # reached by a client that pairs over HTTPS (Hue Sync).
+                errors[CONF_PAIR_NOW] = "pair_after_https"
             if not errors:
                 self._bind_ip = raw_ip or None
                 if user_input.get(CONF_PAIR_NOW, False):

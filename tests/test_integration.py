@@ -859,3 +859,16 @@ async def test_unusable_certificate_keeps_ambilight_running(hass, https_port) ->
     assert not data.api_server.https_listening
     assert data.dtls_server._thread.is_alive()
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_options_refuse_pairing_in_the_same_submit_as_enabling_https(hass, https_port):
+    entry = await _setup(hass, _entry())
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    with patch("custom_components.hue_entertainment.config_flow.probe_port", return_value=None):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], _options(**{CONF_HTTPS_ENABLED: True, CONF_PAIR_NOW: True})
+        )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_PAIR_NOW: "pair_after_https"}
+    assert CONF_HTTPS_ENABLED not in entry.options
+    assert await hass.config_entries.async_unload(entry.entry_id)

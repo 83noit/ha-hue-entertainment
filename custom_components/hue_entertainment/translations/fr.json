@@ -112,7 +112,8 @@
     "error": {
       "invalid_ip": "Adresse IPv4 invalide",
       "https_port_used_by_ha": "Le serveur web de Home Assistant utilise le port 443. Changez le port du serveur web de Home Assistant (Paramètres → Système → Réseau), ou renseignez une adresse IP distincte pour le pont.",
-      "https_port_unavailable": "Le port 443 n'est pas disponible : {error}"
+      "https_port_unavailable": "Le port 443 n'est pas disponible : {error}",
+      "pair_after_https": "Activez la prise en charge de l'application Hue Sync et enregistrez, puis revenez ici pour lancer l'appairage."
     }
   },
   "selector": {
