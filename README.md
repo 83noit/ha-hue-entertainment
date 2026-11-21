@@ -56,6 +56,7 @@ The integration:
 - **Resilient** — options apply without a restart, unavailable lights are skipped, bind failures are reported cleanly
 - **Diagnostics** — downloadable diagnostics (credentials redacted) and a bridge device grouping the entities
 - **Pause / release** — services your automations call to coordinate Zigbee airtime, or a lighting sweep, with the bridge
+- **Hue Sync app support (experimental, opt-in)** — HTTPS + CLIP v2 for Signify's own apps, e.g. Hue Sync on Samsung TVs; see [docs/hue-sync.md](docs/hue-sync.md)
 
 ## Pause, resume, release
 
@@ -122,6 +123,8 @@ Open **Configure** on the integration card to:
 - **Bind IP address** — bind the bridge to a specific IP address (see [Port conflicts](#port-conflicts) below)
 - **Hue API server** — *Automatic* (default), *Standalone server on port 80*, or *Home Assistant's
   web server*; see [Port conflicts](#port-conflicts) for when each applies
+- **Hue Sync app support (experimental)** — off by default; opens an HTTPS server on port 443 for
+  Signify's own apps (not needed for Ambilight TVs). See [docs/hue-sync.md](docs/hue-sync.md)
 
 Changes apply immediately — no restart needed. **Download diagnostics** on the same card gives a
 redacted snapshot (paired clients, engine counters, options) to attach to bug reports.
@@ -135,9 +138,12 @@ to configure. Otherwise the integration runs its own server on port 80; if somet
 the TV's traffic with iptables. Both are walked through in
 [docs/port-conflicts.md](docs/port-conflicts.md).
 
+The optional Hue Sync app support also needs port 443 (TCP); it is only opened when you enable it,
+and checked before the option is saved — see [docs/hue-sync.md](docs/hue-sync.md#port-443).
+
 ## Network requirements
 
-- The TV must reach the HA host on **port 80 (TCP)** and **port 2100 (UDP)**
+- The TV must reach the HA host on **port 80 (TCP)** and **port 2100 (UDP)** — plus **port 443 (TCP)** if Hue Sync app support is enabled
 - If the TV and HA are on different VLANs, **mDNS relay** must be enabled (e.g. Avahi, Unifi mDNS, or a multicast relay) — without it, the TV cannot discover the bridge
 - The TV ignores the port advertised by mDNS and always connects to port 80; only the IP address from mDNS is used
 - The bridge only answers direct requests from local (non-public) addresses: don't forward its ports from the internet or put it behind a reverse proxy — Hue clients never need either
