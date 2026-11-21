@@ -188,8 +188,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HueEntertainmentConfigEn
         )
         http_host = None
 
-    # Build light channel mappings — v1 uses 1-indexed light IDs, v2 uses 0-indexed
-    # channel IDs.  Map both so either protocol version works.
+    # Light mappings keyed by 1-based v1 light id; the engine resolves v2
+    # frames' 0-based channel ids by position in this list.
     mappings = [
         LightMapping(channel_id=i + 1, entity_id=entity_id)
         for i, entity_id in enumerate(light_entities)

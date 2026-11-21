@@ -99,8 +99,13 @@ class _FakeTask:
         raise asyncio.CancelledError
 
 
-def _make_engine(channels: int = 2, notify=None) -> tuple[EntertainmentEngine, MagicMock]:
-    """Return an engine wired to a mock hass and N light mappings."""
+def _make_engine(
+    channels: int = 2, notify=None, first_id: int = 0
+) -> tuple[EntertainmentEngine, MagicMock]:
+    """Return an engine wired to a mock hass and N light mappings.
+
+    ``first_id=1`` mirrors production, where v1 light ids are 1-based.
+    """
     hass = MagicMock()
 
     def _fake_create_task(coro):
@@ -110,7 +115,9 @@ def _make_engine(channels: int = 2, notify=None) -> tuple[EntertainmentEngine, M
         return _FakeTask()
 
     hass.async_create_task = MagicMock(side_effect=_fake_create_task)
-    mappings = [LightMapping(channel_id=i, entity_id=f"light.test_{i}") for i in range(channels)]
+    mappings = [
+        LightMapping(channel_id=i + first_id, entity_id=f"light.test_{i}") for i in range(channels)
+    ]
     engine = EntertainmentEngine(hass, mappings, notify=notify)
     return engine, hass
 
@@ -267,6 +274,35 @@ class TestHandleFrame:
         engine.handle_frame(frame)
         assert engine._mappings[0].dirty is True
         assert engine._mappings[0].pending_data is not None
+
+
+class TestChannelAddressing:
+    """Production mappings are keyed by 1-based v1 light id; v2 channels are 0-based positions."""
+
+    @staticmethod
+    def _dirty_entities(engine) -> set[str]:
+        return {m.entity_id for m in engine._mappings.values() if m.dirty}
+
+    def test_v2_channel_zero_is_first_light(self):
+        engine, _ = _make_engine(channels=3, first_id=1)
+        engine.handle_frame(_v2_header() + _v2_channel(0, 0xFFFF, 0, 0))
+        assert self._dirty_entities(engine) == {"light.test_0"}
+
+    def test_v2_channels_follow_light_order(self):
+        engine, _ = _make_engine(channels=3, first_id=1)
+        engine.handle_frame(_v2_header() + _v2_channel(2, 0, 0xFFFF, 0))
+        assert self._dirty_entities(engine) == {"light.test_2"}
+        assert engine._mappings[3].pending_data["entity_id"] == "light.test_2"
+
+    def test_v2_channel_beyond_lights_is_dropped(self):
+        engine, _ = _make_engine(channels=2, first_id=1)
+        engine.handle_frame(_v2_header() + _v2_channel(2, 0xFFFF, 0, 0))
+        assert not _any_dirty(engine)
+
+    def test_v1_light_id_is_one_based(self):
+        engine, _ = _make_engine(channels=3, first_id=1)
+        engine.handle_frame(_v1_header() + _v1_channel(light_id=1, r=0xFFFF, g=0, b=0))
+        assert self._dirty_entities(engine) == {"light.test_0"}
 
 
 # ---------------------------------------------------------------------------

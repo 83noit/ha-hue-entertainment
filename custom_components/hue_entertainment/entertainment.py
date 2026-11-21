@@ -236,7 +236,12 @@ class EntertainmentEngine:
         notify: Callable[[], None] | None = None,
     ) -> None:
         self._hass = hass
+        # v1 frames and classic-mode PUTs address lights by their v1 light id
+        # (``LightMapping.channel_id``, 1-based in production). v2 frames carry
+        # the index into the entertainment configuration's channel list,
+        # which follows the order of the selected lights — hence two lookups.
         self._mappings = {m.channel_id: m for m in light_mappings}
+        self._channel_order = list(light_mappings)
         # Fired on every state transition (session start/stop, drain
         # start/stop, pause/resume/release) — the single source of truth
         # the binary_sensor/status sensor listen to. Never delayed behind
@@ -338,9 +343,24 @@ class EntertainmentEngine:
             # effect on the lights is dropped.
             return
 
+        if api_version == 0x02:
+            channels = self._v2_channels_to_light_ids(channels)
+
         # Write freshest colour into per-light slots (drain loop sends them)
         for channel in channels:
             self._schedule_update(channel, color_space)
+
+    def _v2_channels_to_light_ids(self, channels: list[ChannelColor]) -> list[ChannelColor]:
+        """Re-key v2 channels (0-based positions) by the mapped light id.
+
+        Channels beyond the selected lights are dropped.
+        """
+        order = self._channel_order
+        return [
+            ChannelColor(order[c.channel_id].channel_id, c.r, c.g, c.b)
+            for c in channels
+            if c.channel_id < len(order)
+        ]
 
     @property
     def stats(self) -> dict[str, Any]:
